@@ -1,0 +1,14 @@
+{
+  "name": "openwrt-view — router monitor",
+  "short_name": "openwrt-view",
+  "description": "Live and historical health, bandwidth, SQM and Wi-Fi monitoring for the OpenWrt router.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#1f1e1b",
+  "theme_color": "#1f1e1b",
+  "icons": [
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -1,0 +1,9 @@
+# compiled binary in workspace root (anchored so it does not match cmd/openwrt-view/)
+/openwrt-view
+
+# command binary if built via cmd/
+/cmd/openwrt-view/openwrt-view
+
+# windows executables
+*.exe
+

@@ -1,2 +1,0 @@
-# openwrt-view
-Network overview

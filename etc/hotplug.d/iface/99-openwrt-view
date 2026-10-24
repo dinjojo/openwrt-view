@@ -1,0 +1,30 @@
+#!/bin/sh
+# openwrt-view hotplug script
+# Starts openwrt-view after boot if netifd brings interfaces up after the rc.d
+# boot window, and restarts it when a CAKE-managed interface changes.
+
+[ "$ACTION" = "ifup" ] || [ "$ACTION" = "ifupdate" ] || [ "$ACTION" = "ifdown" ] || exit 0
+
+SERVICE="/etc/init.d/openwrt-view"
+
+service_enabled() {
+	"$SERVICE" enabled >/dev/null 2>&1
+}
+
+service_running() {
+	"$SERVICE" running >/dev/null 2>&1
+}
+
+if [ "$ACTION" = "ifup" ] || [ "$ACTION" = "ifupdate" ]; then
+	if service_enabled && ! service_running; then
+		logger -t "openwrt-view" "Interface $INTERFACE $ACTION detected, starting fallback service launch"
+		"$SERVICE" start >/dev/null 2>&1 || true
+		exit 0
+	fi
+fi
+
+# Only restart on interfaces that actually use CAKE
+if tc qdisc show dev "$INTERFACE" 2>/dev/null | grep -q "qdisc cake"; then
+	logger -t "openwrt-view" "Interface $INTERFACE $ACTION – restarting"
+	"$SERVICE" restart >/dev/null 2>&1 || true
+fi

@@ -1,0 +1,70 @@
+#!/bin/sh /etc/rc.common
+# openwrt-view - real-time CAKE SQM statistics web dashboard
+# OpenWrt procd init script
+
+START=99
+STOP=10
+USE_PROCD=1
+
+PROG="/usr/bin/openwrt-view"
+HOST="${OPENWRT_VIEW_HOST:-0.0.0.0}"
+PORT="${OPENWRT_VIEW_PORT:-11112}"
+INTERVAL="${OPENWRT_VIEW_INTERVAL:-1s}"
+
+# Time zone for report day boundaries, usage files and the probe cron
+# schedule in the health check. Go ignores OpenWrt's /etc/TZ, so without
+# this the monitor runs on UTC. Must match the zone crond runs in (the
+# router's system zone). Prefer the IANA name from uci (zonename, e.g.
+# Asia/Kolkata — the binary embeds the zone database), else the POSIX
+# string from /etc/TZ or uci timezone (e.g. IST-5:30; fixed offsets only).
+router_tz() {
+	[ -n "$OPENWRT_VIEW_TZ" ] && { echo "$OPENWRT_VIEW_TZ"; return; }
+	local tz
+	tz="$(uci -q get system.@system[0].zonename)"
+	[ -n "$tz" ] || tz="$(cat /etc/TZ 2>/dev/null)"
+	[ -n "$tz" ] || tz="$(uci -q get system.@system[0].timezone)"
+	echo "${tz:-Local}"
+}
+
+start_service() {
+	local tz
+	tz="$(router_tz)"
+	logger -t openwrt-view "Registering procd instance on $HOST:$PORT (interval $INTERVAL, tz $tz)"
+
+	procd_open_instance
+	procd_set_param command /bin/sh -c '
+		if [ ! -x "$1" ]; then
+			logger -t openwrt-view "binary $1 not found at startup, waiting"
+			until [ -x "$1" ]; do
+				sleep 1
+			done
+		fi
+		logger -t openwrt-view "Launching on $2:$3 (interval $4)"
+		# Orbi and Tapo credentials live in root-only KEY=VALUE files the
+		# binary reads itself (-orbi-conf, -tapo-conf), so they never appear
+		# in ps or ubus.
+		CONF=""
+		[ -r /opt/monitoring/orbi.conf ] && CONF="-orbi-conf /opt/monitoring/orbi.conf"
+		[ -r /opt/monitoring/tapo.conf ] && CONF="$CONF -tapo-conf /opt/monitoring/tapo.conf"
+		exec "$1" -host "$2" -port "$3" -interval "$4" $CONF
+	' sh "$PROG" "$HOST" "$PORT" "$INTERVAL"
+	procd_set_param env OPENWRT_VIEW_TZ="$tz"
+	procd_set_param pidfile /var/run/openwrt-view.pid
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param respawn 3600 5 5
+	procd_close_instance
+}
+
+stop_service() {
+	logger -t openwrt-view "Stopping"
+}
+
+reload_service() {
+	stop
+	start
+}
+
+service_triggers() {
+	procd_add_reload_trigger "openwrt-view"
+}
