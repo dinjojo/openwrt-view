@@ -105,7 +105,7 @@ func TestMacToOUI(t *testing.T) {
 	tests := []struct{ mac, want string }{
 		{"00:1A:2B:3C:4D:5E", "00:1a:2b"},
 		{"  a4:83:e7:01:02:03 ", "a4:83:e7"},
-		{"fa:69:11:22:9d:b0", "randomized"}, // locally administered bit set
+		{"fa:69:11:22:33:44", "randomized"}, // locally administered bit set
 		{"02:00:00:00:00:01", "randomized"},
 		{"aa:bb", ""},
 		{"", ""},
@@ -161,7 +161,7 @@ func TestNameAndVendorResolution(t *testing.T) {
 		{"hosts by ip", "00:99:88:77:66:55", "192.168.1.20", "printer", ""},
 		{"vendor plus suffix", "a4:83:e7:01:9d:b0", "", "Apple 9db0", "Apple"},
 		{"negative vendor cache falls back", "00:aa:bb:cc:12:34", "", "device-1234", ""},
-		{"randomized mac", "fa:69:11:22:9d:b0", "", "device-9db0", "randomized MAC"},
+		{"randomized mac", "fa:69:11:22:33:44", "", "device-3344", "randomized MAC"},
 		{"malformed mac", "junk", "", "device-junk", ""},
 	}
 	for _, tc := range tests {

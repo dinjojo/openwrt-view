@@ -582,7 +582,7 @@ func (s *Store) vendorFor(mac string) string {
 	return ""
 }
 
-// macSuffix returns the last two octets, e.g. "9d:b0" from fa:69:..:9d:b0.
+// macSuffix returns the last two octets, e.g. "33:44" from fa:69:..:33:44.
 func macSuffix(mac string) string {
 	f := strings.Split(mac, ":")
 	if len(f) < 2 {
