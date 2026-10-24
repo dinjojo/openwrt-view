@@ -12,9 +12,11 @@ the network configuration.
 
 1. **What it watches** — the router's own services: `tc`/`sch_cake` queue
    stats (100 ms), `nlbwmon` + `ip neigh` per-client accounting (30 s),
-   DHCP/hosts name sources, WAN/system checks, and optionally a Netgear Orbi
-   mesh (which device is on which node, band, signal, roams) and a Tapo
-   smart plug.
+   DHCP/hosts name sources, system metrics and health via **collectd through
+   VictoriaMetrics** (WAN ping/loss, CPU/thermal, conntrack, interface
+   traffic) plus direct reads (`ubus`, `/proc`, `/sys`), and optionally a
+   Netgear Orbi mesh (which device is on which node, band, signal, roams)
+   and a Tapo smart plug.
 2. **What it does** — one Go program on the router collects all of it, gives
    every device a friendly name, grades line health (A+ to F), raises events
    and alerts when something degrades, and serves the dashboard itself on
@@ -29,6 +31,8 @@ the network configuration.
 - `tc` (iproute2) and the `sch_cake` module (`kmod-sched-cake` on OpenWrt);
   install SQM (`luci-app-sqm`) if you want meaningful queue statistics
 - `nlbwmon` for per-client traffic accounting
+- Optional: `collectd` feeding VictoriaMetrics, for WAN RTT/loss, thermal,
+  conntrack and interface history
 - Go 1.26+ only if you build from source
 
 ## Installation
