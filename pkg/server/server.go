@@ -143,6 +143,7 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	s.events.Add("monitor", "info", "Monitor restarted ("+s.version+") — watching WAN, WARP and Cake")
 	if s.orbi.Enabled() {
 		s.orbi.SetEventHook(s.events.Add)
+		s.orbi.SetNameResolver(s.clientStore.Name)
 	}
 	go s.orbiRun(ctx)
 	if s.tapo != nil {
