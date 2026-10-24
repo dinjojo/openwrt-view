@@ -50,7 +50,13 @@ jobs:
             MINOR=0
             PATCH=0
           fi
+          # Skip any tag numbers that already exist (e.g. after a rebase
+          # rewrote history and the tag was re-pointed) so `git tag` can't
+          # collide with a tag that is already on the remote.
           PATCH=$((PATCH + 1))
+          while git rev-parse -q --verify "refs/tags/v$MAJOR.$MINOR.$PATCH" >/dev/null; do
+            PATCH=$((PATCH + 1))
+          done
           NEW="v$MAJOR.$MINOR.$PATCH"
           echo "new_tag=$NEW" >> $GITHUB_OUTPUT
           echo "New tag: $NEW"
