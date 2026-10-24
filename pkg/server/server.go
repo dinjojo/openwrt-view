@@ -116,6 +116,7 @@ func New(addr string, interval time.Duration, histCap int, vmURL, version string
 	app.Get("/api/history/orbi", s.handleAPIHistoryOrbi)
 	app.Get("/api/history/client", s.handleAPIClientHistory)
 	app.Get("/api/clients", s.handleAPIClients)
+	app.Get("/api/usage/window", s.handleAPIUsageWindow)
 	app.Get("/api/health", s.handleAPIHealth)
 	app.Get("/api/events", s.handleAPIEvents)
 	app.Get("/api/percentiles", s.handleAPIPercentiles)
@@ -731,22 +732,74 @@ type wanHistory struct {
 	LossPct []float64 `json:"loss_pct"` // parallel to T; empty when unknown
 }
 
-var wanRangeDur = map[string]int64{
-	"1h": 3600, "6h": 6 * 3600, "24h": 24 * 3600, "7d": 7 * 24 * 3600, "30d": 30 * 24 * 3600,
+// handleAPIUsageWindow returns per-client byte totals (GB) integrated over
+// the requested window — same ?range=/?from=&to= grammar as the history
+// endpoints. The usage donut and top-clients cards use it whenever a window
+// other than the billing period is selected, so every panel speaks the same
+// time range.
+func (s *Server) handleAPIUsageWindow(c fiber.Ctx) error {
+	if s.vmc == nil {
+		return c.Status(503).SendString(`{"error":"victoriametrics not configured"}`)
+	}
+	spec, start, end, errc := parseWindow(c, "24h")
+	if errc != "" {
+		return c.Status(400).SendString(`{"error":"` + errc + `"}`)
+	}
+	rateStart := start - 1800 // rate window bleeds left of the range
+	wl := spec.rateLimit
+	ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
+	defer cancel()
+
+	type agg struct{ rx, tx float64 }
+	aggs := map[string]*agg{}
+	for _, dir := range []string{"rx", "tx"} {
+		series, err := s.vmc.QueryRange(ctx,
+			`sum by (mac) (rate(client_bytes_total{dir="`+dir+`"}[`+wl+`]))`, rateStart, end, spec.step)
+		if err != nil {
+			return c.Status(502).SendString(`{"error":"` + err.Error() + `"}`)
+		}
+		for _, sr := range series {
+			a := aggs[sr.Labels["mac"]]
+			if a == nil {
+				a = &agg{}
+				aggs[sr.Labels["mac"]] = a
+			}
+			for _, v := range sr.Val {
+				if dir == "rx" {
+					a.rx += v * spec.stepSeconds()
+				} else {
+					a.tx += v * spec.stepSeconds()
+				}
+			}
+		}
+	}
+
+	type cliTotals struct {
+		RxGB float64 `json:"rx_gb"`
+		TxGB float64 `json:"tx_gb"`
+	}
+	out := struct {
+		Start   int64                  `json:"start"`
+		End     int64                  `json:"end"`
+		Step    string                 `json:"step"`
+		Clients map[string]*cliTotals  `json:"clients"`
+	}{Start: start, End: end, Step: spec.step, Clients: map[string]*cliTotals{}}
+	for mac, a := range aggs {
+		out.Clients[mac] = &cliTotals{RxGB: a.rx / 1e9, TxGB: a.tx / 1e9}
+	}
+	c.Set("Content-Type", "application/json; charset=utf-8")
+	b, _ := json.Marshal(out)
+	return c.Send(b)
 }
 
 func (s *Server) handleAPIHistoryWAN(c fiber.Ctx) error {
 	if s.vmc == nil {
 		return c.Status(503).SendString(`{"error":"victoriametrics not configured"}`)
 	}
-	rng := c.Query("range", "24h")
-	dur, ok := wanRangeDur[rng]
-	if !ok {
-		return c.Status(400).SendString(`{"error":"range must be one of 1h,6h,24h,7d,30d"}`)
+	spec, start, end, errc := parseWindow(c, "24h")
+	if errc != "" {
+		return c.Status(400).SendString(`{"error":"` + errc + `"}`)
 	}
-	spec := vmRanges[rng]
-	end := time.Now().Unix()
-	start := end - dur
 
 	ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
 	defer cancel()
@@ -767,6 +820,37 @@ func (s *Server) handleAPIHistoryWAN(c fiber.Ctx) error {
 	return c.Send(b)
 }
 
+// parseWindow reads either ?range=1h|3h|6h|24h|7d|30d or an explicit custom
+// window ?from=<unix>&to=<unix> (to clamped to now+5min, span 2 min … 31 days)
+// and returns the query spec plus absolute start/end. An empty errc means OK.
+func parseWindow(c fiber.Ctx, def string) (spec vmRangeSpec, start, end int64, errc string) {
+	if fromQ := c.Query("from"); fromQ != "" {
+		from, err1 := strconv.ParseInt(fromQ, 10, 64)
+		to, err2 := strconv.ParseInt(c.Query("to"), 10, 64)
+		if err1 != nil || err2 != nil || from <= 0 || to <= 0 {
+			return vmRangeSpec{}, 0, 0, "from and to must be unix seconds"
+		}
+		if to > time.Now().Unix()+300 {
+			to = time.Now().Unix() + 300
+		}
+		span := to - from
+		if span < 120 {
+			return vmRangeSpec{}, 0, 0, "window too short (min 2 minutes)"
+		}
+		if span > 31*24*3600 {
+			return vmRangeSpec{}, 0, 0, "window too long (max 31 days)"
+		}
+		return specForSpan(span), from, to, ""
+	}
+	rng := c.Query("range", def)
+	spec, ok := vmRanges[rng]
+	if !ok {
+		return vmRangeSpec{}, 0, 0, "range must be one of 1h,3h,6h,24h,7d,30d"
+	}
+	end = time.Now().Unix()
+	return spec, rangeStart(rng, end), end, ""
+}
+
 // handleAPIHistorySystem returns aligned system health history for a range.
 // Either ?range=1h|3h|6h|24h|7d|30d or an explicit custom window via
 // ?from=<unix>&to=<unix> (to defaults to now; span capped at 31 days).
@@ -774,34 +858,9 @@ func (s *Server) handleAPIHistorySystem(c fiber.Ctx) error {
 	if s.vmc == nil {
 		return c.Status(503).SendString(`{"error":"victoriametrics not configured"}`)
 	}
-	var spec vmRangeSpec
-	var start, end int64
-	if fromQ := c.Query("from"); fromQ != "" {
-		from, err1 := strconv.ParseInt(fromQ, 10, 64)
-		to, err2 := strconv.ParseInt(c.Query("to"), 10, 64)
-		if err1 != nil || err2 != nil || from <= 0 || to <= 0 {
-			return c.Status(400).SendString(`{"error":"from and to must be unix seconds"}`)
-		}
-		if to > time.Now().Unix()+300 {
-			to = time.Now().Unix() + 300
-		}
-		span := to - from
-		if span < 120 {
-			return c.Status(400).SendString(`{"error":"window too short (min 2 minutes)"}`)
-		}
-		if span > 31*24*3600 {
-			return c.Status(400).SendString(`{"error":"window too long (max 31 days)"}`)
-		}
-		spec, start, end = specForSpan(span), from, to
-	} else {
-		rng := c.Query("range", "6h")
-		var ok bool
-		spec, ok = vmRanges[rng]
-		if !ok {
-			return c.Status(400).SendString(`{"error":"range must be one of 1h,3h,6h,24h,7d,30d"}`)
-		}
-		end = time.Now().Unix()
-		start = rangeStart(rng, end)
+	spec, start, end, errc := parseWindow(c, "6h")
+	if errc != "" {
+		return c.Status(400).SendString(`{"error":"` + errc + `"}`)
 	}
 	ctx := c.Context()
 

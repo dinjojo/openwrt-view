@@ -291,12 +291,12 @@
     .bar i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width .4s; }
 
     /* Network card */
-    .ov-net-top { display: flex; gap: var(--s6); margin-bottom: var(--s3); }
-    .ov-net-stat { display: flex; align-items: center; gap: 10px; color: var(--ink-2); font-size: var(--t-xs); }
-    .ov-net-stat b { font-size: 1.5rem; font-weight: 700; color: var(--ink); line-height: 1; }
-    .ov-net-stat > svg { color: var(--accent); flex: none; }
-    .ov-ap-rows { display: flex; flex-direction: column; margin-bottom: var(--s2); }
-    .ov-ap-row { display: flex; align-items: center; gap: 10px; padding: 9px 6px; width: 100%; text-align: left;
+    .ov-net-top { display: flex; gap: var(--s5); margin-bottom: var(--s2); }
+    .ov-net-stat { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: var(--t-xs); }
+    .ov-net-stat b { font-size: 1.1rem; font-weight: 700; color: var(--ink); line-height: 1; }
+    .ov-net-stat > svg { color: var(--accent); flex: none; width: 18px; height: 18px; }
+    .ov-ap-rows { display: flex; flex-direction: column; margin-bottom: var(--s1); }
+    .ov-ap-row { display: flex; align-items: center; gap: 10px; padding: 5px 6px; width: 100%; text-align: left;
       border-radius: 6px; font-size: var(--t-sm); }
     .ov-ap-row:hover { background: var(--well); }
     .ov-ap-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--lamp-ok); flex: none; }
@@ -311,11 +311,11 @@
     .ov-donut-c b { font-size: 1.25rem; }
     .ov-donut-c span { font-size: var(--t-2xs); color: var(--ink-2); }
     .ov-usage-legend { flex: 1; display: flex; flex-direction: column; gap: 7px; font-size: var(--t-xs); min-width: 0; }
-    .ov-usage-row { display: flex; align-items: center; gap: 8px; }
-    .ov-usage-dot { width: 9px; height: 9px; border-radius: 3px; flex: none; }
-    .ov-usage-row .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); }
-    .ov-usage-row .gb { margin-left: auto; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
-    .ov-usage-row .pc { color: var(--ink-2); min-width: 2.6rem; text-align: right; font-variant-numeric: tabular-nums; }
+    .ov-usage-row { display: flex; align-items: baseline; gap: 8px; }
+    .ov-usage-dot { width: 9px; height: 9px; border-radius: 3px; flex: none; align-self: center; }
+    .ov-usage-row .nm { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); min-width: 0; }
+    .ov-usage-row .gb { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .ov-usage-row .pc { color: var(--ink-2); min-width: 2.6rem; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
     /* Wi-Fi band split */
     .ov-bandbar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--well); margin-bottom: var(--s3); }
@@ -342,7 +342,9 @@
     .ov-sh-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 0 var(--s6); }
     .ov-sh-row { display: flex; align-items: center; gap: 10px; padding: 9px 2px;
       border-top: 1px solid var(--hair); font-size: var(--t-sm); }
-    .ov-sh-row .lamp { margin-left: auto; }
+    .ov-sh-row .sh-val { margin-left: auto; font-size: var(--t-xs); color: var(--ink-2);
+      font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .ov-sh-row .lamp { margin-left: 0; }
 
     @media (max-width: 1279px) {
       .ov-g3 { grid-template-columns: 1fr 1fr; }
@@ -727,9 +729,10 @@
       <div class="ov-grid ov-g3">
         <section class="sect ov-card">
           <div class="ov-card-cap"><span class="ov-cap-t">Internet</span>
-            <span id="ov-int-ranges" class="seg" role="group" aria-label="Chart window">
+            <span id="ov-int-ranges" class="seg" role="group" aria-label="Dashboard window">
+              <button data-intrange="billing" class="intrange-btn on">Period</button>
               <button data-intrange="1h" class="intrange-btn">1H</button>
-              <button data-intrange="3h" class="intrange-btn on">3H</button>
+              <button data-intrange="3h" class="intrange-btn">3H</button>
               <button data-intrange="custom" class="intrange-btn">Custom</button>
             </span></div>
           <div id="ov-int-custom" class="hidden" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px">
@@ -782,10 +785,10 @@
       <!-- Row 2: Usage by device · Wi-Fi band split · Top clients -->
       <div class="ov-grid ov-g3">
         <section class="sect ov-card">
-          <div class="ov-card-cap"><span class="ov-cap-t">Usage by device</span><span class="ov-cap-sub">This billing period</span></div>
+          <div class="ov-card-cap"><span class="ov-cap-t">Usage by device</span><span class="ov-cap-sub" id="ov-usage-sub">This billing period</span></div>
           <div class="ov-usage">
             <div class="ov-donut-wrap">
-              <svg id="ov-donut" width="132" height="132" viewBox="0 0 132 132" role="img" aria-label="Usage by device donut chart"></svg>
+              <svg id="ov-donut" width="112" height="112" viewBox="0 0 112 112" role="img" aria-label="Usage by device donut chart"></svg>
               <div class="ov-donut-c"><b class="num" id="ov-donut-total">–</b><span>Total Usage</span></div>
             </div>
             <div id="ov-usage-legend" class="ov-usage-legend"></div>
@@ -800,7 +803,7 @@
         </section>
 
         <section class="sect ov-card">
-          <div class="ov-card-cap"><span class="ov-cap-t">Top clients</span><span class="ov-cap-sub">This billing period</span></div>
+          <div class="ov-card-cap"><span class="ov-cap-t">Top clients</span><span class="ov-cap-sub" id="ov-top-sub">This billing period</span></div>
           <div id="ov-topclients" class="ov-top-rows"></div>
           <div id="ov-tapo" class="sm muted ov-foot" style="display:none"></div>
         </section>
@@ -826,6 +829,7 @@
           <h2 class="h2">Line health <span class="sub" id="ov-lh-sub">WAN latency, last 24 hours</span></h2>
           <div id="lh-ranges" class="seg" role="group" aria-label="Line health window">
             <button data-lhrange="1h" class="lhrange-btn">1H</button>
+            <button data-lhrange="3h" class="lhrange-btn">3H</button>
             <button data-lhrange="6h" class="lhrange-btn">6H</button>
             <button data-lhrange="24h" class="lhrange-btn on">24H</button>
             <button data-lhrange="7d" class="lhrange-btn">7D</button>
@@ -3559,7 +3563,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     };
 
     function worstOf(list) {
-      const known = list.filter(c => c && c.state !== 'unknown');
+      // Minor checks (informational, e.g. WARP fallback) never degrade the
+      // service summary — they stay pills on their rows.
+      const known = list.filter(c => c && !c.minor && c.state !== 'unknown');
       if (!known.length) return 'unknown';
       return known.some(c => c.state === 'crit') ? 'crit' : known.some(c => c.state === 'warn') ? 'warn' : 'ok';
     }
@@ -3722,10 +3728,90 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     let ovClients = null;    // last /api/clients payload (topology rate sums)
     let ovIntPlot = null;    // Internet card chart
     let ovIntAt = '';        // payload stamp the chart was built from
-    // Internet card window: presets plus a custom from/to range.
-    let intRange = '3h';     // '1h' | '3h' | 'custom'
+    // Internet card window — one global window for every time-based panel:
+    // charts, usage donut, top clients and events. 'billing' shows the
+    // billing month for usage and a 7-day chart; the others query Victoria
+    // Metrics for the exact span.
+    let intRange = 'billing';// 'billing' | '1h' | '3h' | 'custom'
     let intCustom = null;    // { from, to } unix seconds, custom window only
-    const intCache = {};     // window key -> { d, at }
+    const intCache = {};     // window key -> { d, at }  (chart payloads)
+    const winCache = {};     // window key -> { clients, at } (per-client GB)
+    let winUsage = null;     // cache for the CURRENT window
+    let ovEvents = [];       // last events payload (re-filtered on window change)
+    const winKey = () => intRange === 'custom' ? (intCustom ? 'c' + intCustom.from + '-' + intCustom.to : '') : intRange;
+    const winActive = () => intRange !== 'billing';
+
+    /** Caption fragment for the selected window, e.g. "Last 3 hours". */
+    function winLabel() {
+      if (intRange === 'billing') return 'This billing period';
+      if (intRange === '1h') return 'Last hour';
+      if (intRange === '3h') return 'Last 3 hours';
+      if (intCustom) {
+        const f = new Date(intCustom.from * 1000), t2 = new Date(intCustom.to * 1000);
+        return f.toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) +
+          ' – ' + t2.toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+      }
+      return '';
+    }
+
+    /** Per-client usage totals in GB for the selected window:
+     *  { MAC: gb } — from /api/usage/window, or the billing cache. */
+    function usageTotals() {
+      if (winActive()) {
+        if (!winUsage) return null;
+        const t = {};
+        Object.keys(winUsage.clients || {}).forEach(mac => {
+          const c = winUsage.clients[mac];
+          t[mac.toUpperCase()] = (c.rx_gb || 0) + (c.tx_gb || 0);
+        });
+        return t;
+      }
+      return ovUsageCache ? usagePeriodTotals(ovUsageCache) : null;
+    }
+
+    /** Fetch per-client totals for the window, then repaint the donut,
+     *  top clients and events. No-op in billing mode (daily files cover it). */
+    async function loadWinUsage() {
+      if (!winActive()) {
+        renderUsageDonut();
+        renderTopClients(ovClients);
+        renderEvents(ovEvents);
+        return;
+      }
+      if (intRange === 'custom' && !intCustom) return;
+      const key = winKey();
+      const ttl = intRange === '1h' ? 60000 : 300000;
+      try {
+        const cached = winCache[key];
+        if (cached && Date.now() - cached.at < ttl) {
+          winUsage = cached;
+        } else {
+          const q = intRange === 'custom' ? 'from=' + intCustom.from + '&to=' + intCustom.to : 'range=' + intRange;
+          const d = await fetch(appURL('/api/usage/window?' + q)).then(r => r.json());
+          if (d && d.clients) {
+            winUsage = { clients: d.clients, at: Date.now() };
+            winCache[key] = winUsage;
+          }
+        }
+      } catch (e) { console.error('[win-usage]', e); }
+      renderUsageDonut();
+      renderTopClients(ovClients);
+      renderEvents(ovEvents);
+    }
+
+    /** Re-render every window-driven panel. Called on pill clicks and
+     *  custom Apply. */
+    function onWindowChange() {
+      document.getElementById('ov-int-custom').classList.toggle('hidden', intRange !== 'custom');
+      const lab = winLabel();
+      const usageSub = document.getElementById('ov-usage-sub');
+      const topSub = document.getElementById('ov-top-sub');
+      if (usageSub) usageSub.textContent = lab;
+      if (topSub) topSub.textContent = lab;
+      loadIntChart();
+      syncLineHealth();
+      loadWinUsage();
+    }
     let ovPlots = [];
 
     function ovMbit(bps) {
@@ -3745,7 +3831,6 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       const ic = document.getElementById('ov-verdict-ic');
       if (!hEl || !checks || !checks.length) return;
       const major = checks.filter(c => !c.minor);
-      const noted = checks.filter(c => c.minor && (c.state === 'warn' || c.state === 'crit'));
       const st = worstState(major);
       const gradeM = ((checks.find(c => /latency under load/i.test(c.name)) || {}).value || '')
         .match(/\(([A-F][+-]?)\)/);
@@ -3754,8 +3839,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       hEl.dataset.state = st;
       if (st === 'ok') {
         hEl.textContent = gradeM ? 'All quiet — line health ' + gradeM[1] : 'All quiet';
-        sub.textContent = 'Your home network is running smoothly.' +
-          (noted.length ? ' Noted: ' + noted.map(c => c.name + ': ' + c.value).join(' · ') : '');
+        sub.textContent = ''; // no note line while everything is fine
       } else if (st === 'unknown') {
         hEl.textContent = 'Waiting for the first health round…';
         sub.textContent = 'checks run every few seconds';
@@ -3870,22 +3954,40 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
 
     // Line health: WAN latency history from collectd ping probes.
     let lhRange = '24h';
+    let lhCustom = null;     // { from, to } when the global window is custom
     let lhCache = {};
     let lhPlot = null;
-    const LH_SUBS = { '1h': 'last hour', '6h': 'last 6 hours', '24h': 'last 24 hours', '7d': 'last 7 days', '30d': 'last 30 days' };
+    const LH_SUBS = { '1h': 'last hour', '3h': 'last 3 hours', '6h': 'last 6 hours', '24h': 'last 24 hours', '7d': 'last 7 days', '30d': 'last 30 days' };
+    /** Keep the Line health chart in step with the global window (it keeps
+     *  its own pill row for standalone use). */
+    function syncLineHealth() {
+      if (intRange === 'custom') {
+        lhRange = 'custom';
+        lhCustom = intCustom ? { from: intCustom.from, to: intCustom.to } : null;
+        document.querySelectorAll('.lhrange-btn').forEach(b => b.classList.remove('on'));
+        loadLineHealth();
+        return;
+      }
+      lhCustom = null;
+      lhRange = { billing: '7d', '1h': '1h', '3h': '3h' }[intRange] || '24h';
+      _setPillBtns('.lhrange-btn', 'lhrange', lhRange);
+      loadLineHealth();
+    }
     async function loadLineHealth() {
       try {
         let d;
-        const c = lhCache[lhRange];
+        const key = lhRange === 'custom' ? (lhCustom ? 'c' + lhCustom.from + '-' + lhCustom.to : '') : lhRange;
+        const c = lhCache[key];
         if (c && Date.now() - c.at < 60000) {
           d = c.d;
         } else {
-          d = await fetch(appURL('/api/history/wan?range=' + lhRange)).then(r => r.json());
-          lhCache[lhRange] = { d, at: Date.now() };
+          const q = lhRange === 'custom' && lhCustom ? 'from=' + lhCustom.from + '&to=' + lhCustom.to : 'range=' + lhRange;
+          d = await fetch(appURL('/api/history/wan?' + q)).then(r => r.json());
+          lhCache[key] = { d, at: Date.now() };
         }
         if (!d || !d.t || d.t.length < 2 || !isUPlotReady()) return;
         const sub = document.getElementById('ov-lh-sub');
-        if (sub) sub.textContent = 'WAN latency, ' + (LH_SUBS[lhRange] || lhRange);
+        if (sub) sub.textContent = 'WAN latency, ' + (lhRange === 'custom' && lhCustom ? winLabel() : (LH_SUBS[lhRange] || lhRange));
         const cd = document.getElementById('ov-lhchart');
         if (!cd || cd.offsetParent === null) return; // tab hidden
         const W = Math.max(200, cd.clientWidth - 4);
@@ -3898,12 +4000,13 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     }
 
     // ── Overview: gateway gauges, card renderers ──────────────────────────
-    /** Internet card chart for the selected window. 3h slices the shared
-     *  24h payload; 1h and custom windows fetch their own (finer) series. */
+    /** Internet card chart for the selected window. billing shows a 7-day
+     *  view, 3h slices the shared 24h payload, 1h and custom windows fetch
+     *  their own (finer) series. */
     async function loadIntChart() {
       try {
         if (intRange === 'custom' && !intCustom) return;
-        const key = intRange === 'custom' ? 'c' + intCustom.from + '-' + intCustom.to : intRange;
+        const key = winKey();
         const ttl = intRange === '1h' ? 60000 : 300000;
         let d;
         const cached = intCache[key];
@@ -3915,6 +4018,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
             ovWanAt = Date.now();
           }
           d = ovWanData;
+        } else if (intRange === 'billing') {
+          d = await fetch(appURL('/api/history/system?range=7d')).then(r => r.json());
         } else if (intRange === '1h') {
           d = await fetch(appURL('/api/history/system?range=1h')).then(r => r.json());
         } else {
@@ -3940,6 +4045,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           const f = new Date(d.t[0] * 1000), t2 = new Date(d.t[d.t.length - 1] * 1000);
           sub.textContent = f.toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) +
             ' – ' + t2.toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+          sub.classList.remove('hidden');
+        } else if (intRange === 'billing') {
+          sub.textContent = 'last 7 days';
           sub.classList.remove('hidden');
         } else {
           sub.classList.add('hidden');
@@ -4064,17 +4172,25 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           wifi.length + ' on Wi-Fi · ' + n5 + '× 5 GHz · ' + n24 + '× 2.4 GHz';
       }
 
-      // System health rows: one lamp + word per service.
+      // System health rows: one lamp + word per service, plus a live value
+      // where one exists (SQM grade, CPU load, AP client counts).
       const rows = [];
-      const shRow = (name, state) => '<div class="ov-sh-row"><span class="n">' + name + '</span>' +
+      const shRow = (name, state, val) => '<div class="ov-sh-row"><span class="n">' + name + '</span>' +
+        (val ? '<span class="sh-val">' + val + '</span>' : '') +
         lamp(state, 'sm') + '</div>';
-      const byName = n => (hchecks.find(c => c.name === n) || {}).state || 'unknown';
-      rows.push(shRow('Internet (PPPoE)', byName('ISP session')));
-      rows.push(shRow('WARP exit path', byName('Exit path (WARP)')));
-      rows.push(shRow('SQM shaping', byName('Traffic shaping')));
-      rows.push(shRow('Router (NanoPi R6C)', byName('Router CPU')));
+      const byName = n => (hchecks.find(c => c.name === n) || {});
+      const gradeM = ((byName('Latency under load') || {}).detail || '').match(/grade ([A-F][+-]?)/i);
+      rows.push(shRow('Internet (PPPoE)', byName('ISP session').state || 'unknown'));
+      rows.push(shRow('SQM grade', byName('Latency under load').state || 'unknown',
+        gradeM ? gradeM[1].toUpperCase() : ''));
+      rows.push(shRow('WARP exit path', byName('Exit path (WARP)').state || 'unknown',
+        (byName('Exit path (WARP)').value || '') === 'via WARP' ? 'tunnel' : 'direct WAN'));
+      rows.push(shRow('SQM shaping', byName('Traffic shaping').state || 'unknown'));
+      rows.push(shRow('Router (NanoPi R6C)', byName('Router CPU').state || 'unknown',
+        (byName('Router CPU').value || '')));
       rows.push(shRow(lastOrbi && lastOrbi.model ? h(lastOrbi.model) + ' (AP)' : 'Orbi AP',
-        lastOrbi ? (lastOrbi.reachable ? 'ok' : 'crit') : 'unknown'));
+        lastOrbi ? (lastOrbi.reachable ? 'ok' : 'crit') : 'unknown',
+        lastOrbi ? (lastOrbi.devices || []).length + ' seen' : ''));
       (lastOrbi && lastOrbi.satellites || []).forEach(s => {
         rows.push(shRow(h(s.model || s.name || s.mac) + ' (Satellite)', s.online === false ? 'crit' : 'ok'));
       });
@@ -4121,16 +4237,17 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
 
     /** Usage-by-device donut + legend, mock style. */
     const DONUT_COLORS = ['#0069ff', '#66a3ff', '#16a34a', '#99b8d9'];
-    function renderUsageDonut(u) {
+    function renderUsageDonut() {
       const svg = document.getElementById('ov-donut');
       const legend = document.getElementById('ov-usage-legend');
       if (!svg || !legend) return;
-      const totals = usagePeriodTotals(u);
+      const totals = usageTotals();
+      if (!totals) return; // window payload not loaded yet
       const rows = Object.keys(totals).map(mac => {
         const dev = orbiByMac[mac] || {};
         const cl = (ovClients || []).find(c => (c.mac || '').toUpperCase() === mac.toUpperCase());
         const isUntracked = /^00:00:00/.test(mac.toUpperCase());
-        const nm = isUntracked ? 'Unattributed'
+        const nm = isUntracked ? 'WARP'
           : dev.name && dev.name.toLowerCase() !== 'unknown' ? dev.name
           : (cl && cl.name) || (cl && cl.ip) || mac;
         return { mac, name: nm, gb: totals[mac], untracked: isUntracked };
@@ -4146,25 +4263,28 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       const top = rows.slice(0, 4);
       const otherGb = rows.slice(4).reduce((a, r) => a + r.gb, 0);
       const slices = otherGb > 0 ? top.concat([{ mac: '', name: 'Other', gb: otherGb }]) : top;
-      // Donut: r=54, C≈339.3; each slice is a stroked arc.
-      const C = 2 * Math.PI * 54;
+      // Donut: r=44, C≈276.5; each slice is a stroked arc.
+      const C = 2 * Math.PI * 44;
       let off = 0;
       svg.innerHTML = slices.map((s, i) => {
         const frac = total > 0 ? s.gb / total : 0;
         const len = Math.max(0, frac * C - 2); // 2px gap
-        const arc = '<circle cx="66" cy="66" r="54" fill="none" stroke="' + (DONUT_COLORS[i] || '#9aa4b2') +
-          '" stroke-width="20" stroke-dasharray="' + len.toFixed(1) + ' ' + (C - len).toFixed(1) +
-          '" stroke-dashoffset="' + (-off).toFixed(1) + '" transform="rotate(-90 66 66)" stroke-linecap="butt"/>';
+        const arc = '<circle cx="56" cy="56" r="44" fill="none" stroke="' + (DONUT_COLORS[i] || '#9aa4b2') +
+          '" stroke-width="18" stroke-dasharray="' + len.toFixed(1) + ' ' + (C - len).toFixed(1) +
+          '" stroke-dashoffset="' + (-off).toFixed(1) + '" transform="rotate(-90 56 56)" stroke-linecap="butt"/>';
         off += frac * C;
         return arc;
       }).join('');
       legend.innerHTML = slices.map((s, i) => {
         const pct = total > 0 ? (s.gb / total * 100) : 0;
         // nlbwmon lumps everything it cannot tie to a device MAC under
-        // 00:00:00:00:00:00 — mostly the router's own traffic.
+        // 00:00:00:00:00:00. Verified against the daily history: it spikes
+        // to ~12 GB/day on days when WARP routes client traffic (inside
+        // the tunnel no client MAC is visible) and drops to ~0 when the
+        // tunnel is down — the residue is the router's own traffic.
         const isUnattr = s.untracked;
         return '<div class="ov-usage-row"' + (isUnattr
-          ? ' title="Traffic the router could not tie to one device — mostly the router itself (DNS, NTP, speedtests, updates) plus anything without a known MAC"'
+          ? ' title="Traffic that left through the WARP tunnel — inside the tunnel every client\'s traffic is multiplexed into one encrypted connection, so per-device identity is lost — plus the router itself (DNS, NTP, updates, speed tests). Near zero on days the tunnel is down."'
           : '') + '>' +
           '<span class="ov-usage-dot" style="background:' + (DONUT_COLORS[i] || '#9aa4b2') + '"></span>' +
           '<span class="nm">' + h(s.name) + '</span>' +
@@ -4204,8 +4324,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     function renderTopClients(list) {
       const el = document.getElementById('ov-topclients');
       if (!el) return;
-      // Rank by this billing period's usage when known, else by lifetime totals.
-      const totals = ovUsageCache ? usagePeriodTotals(ovUsageCache) : null;
+      // Rank by the selected window's usage when known, else by lifetime totals.
+      const totals = usageTotals();
       const online = list.filter(c => c.online);
       const gbOf = c => totals ? (totals[(c.mac || '').toUpperCase()] || 0) : (c.rx_total + c.tx_total) / 1024 ** 3;
       const top = online.slice().sort((a, b) => gbOf(b) - gbOf(a)).slice(0, 5);
@@ -4230,6 +4350,14 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
 
     function renderEvents(list) {
       const el = document.getElementById('ov-events');
+      // A selected window narrows the feed to what happened inside it.
+      if (winActive()) {
+        const from = intRange === '1h' ? Date.now() / 1000 - 3600
+          : intRange === '3h' ? Date.now() / 1000 - 3 * 3600
+          : intCustom ? intCustom.from : 0;
+        const to = intRange === 'custom' && intCustom ? intCustom.to : Infinity;
+        list = list.filter(ev => ev.at >= from && ev.at <= to);
+      }
       const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
       el.innerHTML = list.map(ev => {
         const d = new Date(ev.at * 1000);
@@ -4270,10 +4398,16 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         if (Date.now() - orbiAt > 60000) loadOrbi(); // topology + AP rows
         loadTapo(); // smart plug line, hidden when not configured
         ovClients = Array.isArray(cl) ? cl : [];
+        if (Array.isArray(evs)) ovEvents = evs;
         document.getElementById('ov-clients').textContent = cl && cl.filter ? cl.filter(c => c.online).length : '–';
-        renderUsageDonut(ovUsageCache);
+        // In window mode the per-panel totals refresh on their own cadence.
+        if (winActive()) {
+          const cached = winCache[winKey()];
+          if (!cached || Date.now() - cached.at > 60000) loadWinUsage();
+        }
+        renderUsageDonut();
         renderTopClients(ovClients);
-        renderEvents(Array.isArray(evs) ? evs : []);
+        renderEvents(ovEvents);
         if (Array.isArray(evs)) { lampEvents = evs; lampEventsAt = Date.now(); renderLamps(); }
         renderTopology(); // Clients node uses the live online count
         renderOverview();
@@ -4342,13 +4476,13 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     document.getElementById('ov-wifi-open').addEventListener('click', () => setTab('clients'));
     document.getElementById('ov-gateway').addEventListener('click', () => setTab('system'));
     document.getElementById('ov-events-all').addEventListener('click', () => setTab('system'));
-    // Internet card chart window: presets refetch, Custom reveals from/to.
+    // Global dashboard window: presets refetch every panel, Custom reveals
+    // from/to and applies on Apply.
     document.addEventListener('click', e => {
       const b = e.target.closest('.intrange-btn');
       if (!b) return;
       intRange = b.dataset.intrange;
       _setPillBtns('.intrange-btn', 'intrange', intRange);
-      document.getElementById('ov-int-custom').classList.toggle('hidden', intRange !== 'custom');
       if (intRange === 'custom') {
         const f = document.getElementById('ov-int-from'), t = document.getElementById('ov-int-to');
         if (!f.value && !t.value) {          // sensible defaults: last 3 hours
@@ -4357,7 +4491,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           t.value = now.toLocaleString('sv', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(' ', 'T');
         }
       } else {
-        loadIntChart();
+        onWindowChange();
       }
     });
     document.getElementById('ov-int-apply').addEventListener('click', () => {
@@ -4369,7 +4503,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (!(from > 0 && to > from) || to - from > 31 * 24 * 3600) return;
       intCustom = { from, to };
       ovIntAt = ''; // force a rebuild for the new window
-      loadIntChart();
+      onWindowChange();
     });
     // Health group pills jump to the tab that owns that category.
     document.addEventListener('click', e => {
@@ -4386,6 +4520,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     _setPillBtns('.intrange-btn', 'intrange', intRange);
     _setPillBtns('.wanrange-btn', 'wanrange', wanRange);
     _setPillBtns('.lhrange-btn', 'lhrange', lhRange);
+    syncLineHealth(); // Line health follows the global window from boot
     // Restore the tab the user was on before a reload (e.g. theme toggle).
     let bootTab = 'overview';
     try { bootTab = sessionStorage.getItem('openwrtview-tab') || 'overview'; } catch (_) {}
