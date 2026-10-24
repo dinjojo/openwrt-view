@@ -275,9 +275,13 @@ func TestEvalWarp(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			got := evalWarp(c.in)
 			checkCommon(t, got, "Exit path (WARP)", c.w)
-			// A dead tunnel falls back to WAN — never critical by design.
+			// A dead tunnel falls back to WAN — never critical, and always
+			// informational: the network keeps working either way.
 			if got.State == StateCrit {
 				t.Error("WARP must never be critical")
+			}
+			if !got.Minor {
+				t.Error("WARP check must always be Minor (informational)")
 			}
 		})
 	}

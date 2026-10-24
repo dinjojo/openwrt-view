@@ -595,27 +595,42 @@ func macSuffix(mac string) string {
 // considers currently reachable on br-lan and a MAC -> IP map (first entry
 // per MAC, any device). MAC keys are lower-cased. On error both maps are
 // empty.
+// staleKeep is how long a STALE neighbour entry may still count as
+// "online": the kernel keeps STALE entries for hours after a device
+// disappears (a PS5 gone for 5 h still showed a STALE entry), but a
+// connected-but-idle device refreshes its entry (or gets traffic) within
+// minutes. Beyond this window a STALE entry is a ghost.
+const staleKeep = 600 // seconds
+
 func readNeigh() (online map[string]bool, ips map[string]string) {
 	online, ips = map[string]bool{}, map[string]string{}
-	out, err := exec.Command("ip", "neigh", "show").Output()
+	out, err := exec.Command("ip", "-s", "neigh", "show").Output()
 	if err != nil {
 		return online, ips
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		f := strings.Fields(line)
-		// format: IP dev IFACE lladdr MAC [router] STATE
+		// format: [IP] [dev IFACE] [lladdr MAC] [router] [used A/B/Cprobes N] [STATE]
 		if len(f) < 4 {
 			continue
 		}
 		var dev, mac string
-		var hasState bool
+		var usedSec int64 = -1 // -1: no recency stamp
 		for i := 1; i+1 < len(f); i++ {
 			switch strings.ToLower(f[i]) {
 			case "dev":
 				dev = f[i+1]
 			case "lladdr":
 				mac = strings.ToLower(f[i+1])
-				hasState = i+1 < len(f)-1 // MAC is not the last field
+			case "used":
+				// "A/B/Cprobes N": A/B/C are seconds since the entry was
+				// last used/updated/confirmed — take the most recent.
+				nums := strings.Split(strings.Split(f[i+1], "probes")[0], "/")
+				for _, n := range nums {
+					if v, err := strconv.ParseInt(n, 10, 64); err == nil && (usedSec < 0 || v < usedSec) {
+						usedSec = v
+					}
+				}
 			}
 		}
 		if mac == "" {
@@ -624,9 +639,15 @@ func readNeigh() (online map[string]bool, ips map[string]string) {
 		if _, ok := ips[mac]; !ok {
 			ips[mac] = f[0]
 		}
-		state := f[len(f)-1]
-		if hasState && dev == "br-lan" && (state == "REACHABLE" || state == "DELAY" || state == "PROBE" || state == "STALE") {
+		state := strings.ToLower(f[len(f)-1])
+		if dev != "br-lan" {
+			continue
+		}
+		switch {
+		case state == "reachable" || state == "delay" || state == "probe":
 			online[mac] = true
+		case state == "stale" && usedSec >= 0 && usedSec < staleKeep:
+			online[mac] = true // recently used despite the STALE state
 		}
 	}
 	return online, ips

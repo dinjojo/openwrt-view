@@ -679,8 +679,8 @@ func TestPollReadsNeighbourTableOncePerPoll(t *testing.T) {
 		if len(lines) != poll {
 			t.Fatalf("after %d polls of 3 clients: %d ip invocations %q, want %d", poll, len(lines), lines, poll)
 		}
-		if lines[poll-1] != "neigh show" {
-			t.Errorf("ip invoked with %q, want \"neigh show\"", lines[poll-1])
+		if lines[poll-1] != "-s neigh show" {
+			t.Errorf("ip invoked with %q, want \"-s neigh show\"", lines[poll-1])
 		}
 	}
 	// The single read still drives both IP resolution and online status.
@@ -698,6 +698,8 @@ func TestReadNeigh(t *testing.T) {
 		"10.0.0.2 dev wan lladdr 00:11:22:33:44:66 REACHABLE\n"+ // not br-lan: IP only
 		"192.168.1.12 dev br-lan lladdr 00:11:22:33:44:77 router DELAY\n"+
 		"192.168.1.13 dev br-lan lladdr 00:11:22:33:44:88\n"+ // no state
+		"192.168.1.14 dev br-lan lladdr 00:11:22:33:44:99 used 300/300/280probes 1 STALE\n"+ // STALE but used recently
+		"192.168.1.15 dev br-lan lladdr 00:11:22:33:44:aa used 20282/20282/20253probes 1 STALE\n"+ // ghost: device gone ~5h ago
 		"192.168.1.50 dev br-lan INCOMPLETE\n", 0)
 	online, ips := readNeigh()
 	wantIPs := map[string]string{
@@ -706,6 +708,8 @@ func TestReadNeigh(t *testing.T) {
 		"00:11:22:33:44:66": "10.0.0.2",
 		"00:11:22:33:44:77": "192.168.1.12",
 		"00:11:22:33:44:88": "192.168.1.13",
+		"00:11:22:33:44:99": "192.168.1.14",
+		"00:11:22:33:44:aa": "192.168.1.15",
 	}
 	if len(ips) != len(wantIPs) {
 		t.Errorf("ips = %v, want %v", ips, wantIPs)
@@ -715,7 +719,12 @@ func TestReadNeigh(t *testing.T) {
 			t.Errorf("ips[%s] = %q, want %q", k, ips[k], v)
 		}
 	}
-	wantOnline := map[string]bool{"aa:bb:cc:00:00:01": true, "00:11:22:33:44:77": true}
+	wantOnline := map[string]bool{
+		"aa:bb:cc:00:00:01": true, // REACHABLE
+		"00:11:22:33:44:77": true, // DELAY
+		"00:11:22:33:44:99": true, // STALE but used 300s ago: still around
+		// 00:11:22:33:44:aa STALE used 5h ago: ghost, offline
+	}
 	if len(online) != len(wantOnline) {
 		t.Errorf("online = %v, want %v", online, wantOnline)
 	}

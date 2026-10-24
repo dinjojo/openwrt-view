@@ -254,6 +254,17 @@
     .topo-rate { font-size: var(--t-2xs); color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
     .topo-rate .dn { color: var(--dl); font-weight: 600; }
     .topo-rate .upv { color: var(--ul); font-weight: 600; }
+    /* Satellites hang off the AP downward, out of the main chain: they can
+       be powered off without breaking the Internet → router → AP → clients
+       path. Absolute positioning keeps the chain's icons aligned; the nav
+       reserves the extra height when satellites exist. */
+    .ov-topo.has-sats { padding-bottom: 138px; }
+    .topo-stack { position: relative; }
+    .topo-sats { position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+      display: flex; flex-direction: column; align-items: center; }
+    .topo-sat-stub { width: 2px; height: 14px; border-radius: 1px;
+      background: linear-gradient(180deg, var(--accent), var(--groove)); opacity: .6; }
+    .topo-sat-stub.offline { background: repeating-linear-gradient(180deg, var(--lamp-off) 0 6px, transparent 6px 12px); }
 
     /* Internet card */
     .ov-big { display: flex; gap: var(--s6); }
@@ -322,6 +333,7 @@
       border-radius: 6px; font-size: var(--t-sm); }
     .ov-top-row:hover { background: var(--well); }
     .ov-top-row > svg { color: var(--ink-2); flex: none; }
+    .cl-ic { display: inline-flex; vertical-align: -2px; margin-right: 6px; color: var(--ink-2); }
     .ov-top-row .nm { flex: 0 0 7.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 550; }
     .ov-top-row .bar { flex: 1; min-width: 2rem; }
     .ov-top-row .gb { width: 5rem; text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; flex: none; }
@@ -502,7 +514,7 @@
     .ev .when { font-family: var(--f-num); font-size: var(--t-xs); color: var(--ink-2); }
     .ev .mk { display: flex; justify-content: center; align-self: center; color: var(--ink-3); }
     .scrollbox { max-height: 24rem; overflow-y: auto; padding-right: var(--s2); }
-    .gauge { display: grid; grid-template-columns: 3.25rem 1fr 4rem; align-items: center; gap: var(--s3); font-size: var(--t-sm); }
+    .gauge { display: grid; grid-template-columns: 6.5rem 1fr 4rem; align-items: center; gap: var(--s3); font-size: var(--t-sm); }
     .gauge .bar { margin-top: 0; }
     .gauge-lab { color: var(--ink-2); font-weight: 600; }
 
@@ -714,7 +726,19 @@
       <!-- Row 1: Internet · Gateway · Network -->
       <div class="ov-grid ov-g3">
         <section class="sect ov-card">
-          <div class="ov-card-cap"><span class="ov-cap-t">Internet</span><span class="ov-cap-sub" id="ov-int-sub">Live · last 3 hours</span></div>
+          <div class="ov-card-cap"><span class="ov-cap-t">Internet</span>
+            <span id="ov-int-ranges" class="seg" role="group" aria-label="Chart window">
+              <button data-intrange="1h" class="intrange-btn">1H</button>
+              <button data-intrange="3h" class="intrange-btn on">3H</button>
+              <button data-intrange="custom" class="intrange-btn">Custom</button>
+            </span></div>
+          <div id="ov-int-custom" class="hidden" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px">
+            <input type="datetime-local" id="ov-int-from" class="input" style="width:11rem;padding:2px 6px;font-size:var(--t-xs)" aria-label="From">
+            <span class="xs muted">–</span>
+            <input type="datetime-local" id="ov-int-to" class="input" style="width:11rem;padding:2px 6px;font-size:var(--t-xs)" aria-label="To">
+            <button id="ov-int-apply" style="border:1px solid var(--groove);background:var(--well);color:var(--ink-2);border-radius:3px;padding:3px 9px;font-size:var(--t-xs);font-family:var(--f-num)">Apply</button>
+          </div>
+          <span id="ov-int-sub" class="xs muted hidden"></span>
           <div class="ov-big">
             <div class="ov-big-cell"><div class="ov-big-num ov-dl" id="ov-down">–</div>
               <div class="ov-big-lab"><span class="ov-arrow dl">↓</span> Mbps down</div></div>
@@ -801,6 +825,7 @@
         <div class="sect-head">
           <h2 class="h2">Line health <span class="sub" id="ov-lh-sub">WAN latency, last 24 hours</span></h2>
           <div id="lh-ranges" class="seg" role="group" aria-label="Line health window">
+            <button data-lhrange="1h" class="lhrange-btn">1H</button>
             <button data-lhrange="6h" class="lhrange-btn">6H</button>
             <button data-lhrange="24h" class="lhrange-btn on">24H</button>
             <button data-lhrange="7d" class="lhrange-btn">7D</button>
@@ -2495,6 +2520,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           ' data-ip="' + h(c.ip) + '" data-vendor="' + h(c.vendor || '') + '"' +
           ' title="View connection history" tabindex="0">' +
           '<td>' +
+            '<span class="cl-ic">' + devIcon(c, 14) + '</span>' +
             '<span class="strong ink">' + h(c.name || c.mac) + '</span>' +
             '<span class="num xs muted block mt1">' + (s.wifi ? sigHTML : '') + sub + '</span>' +
           '</td>' +
@@ -3694,8 +3720,12 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     let ovWanData = null;    // /api/history/system 24h payload (chart + gauges)
     let ovWanAt = 0;         // when ovWanData was fetched
     let ovClients = null;    // last /api/clients payload (topology rate sums)
-    let ovIntPlot = null;    // Internet card mini chart
-    let ovIntAt = 0;         // ovWanAt stamp the mini chart was built from
+    let ovIntPlot = null;    // Internet card chart
+    let ovIntAt = '';        // payload stamp the chart was built from
+    // Internet card window: presets plus a custom from/to range.
+    let intRange = '3h';     // '1h' | '3h' | 'custom'
+    let intCustom = null;    // { from, to } unix seconds, custom window only
+    const intCache = {};     // window key -> { d, at }
     let ovPlots = [];
 
     function ovMbit(bps) {
@@ -3706,21 +3736,26 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
 
     // ── Overview hero: verdict, topology, line health ─────────────────────
 
-    /** One plain-words headline from the live health checks. */
+    /** One plain-words headline from the live health checks. Minor checks
+     *  (informational, e.g. WARP fallback) never drive the headline — the
+     *  network is fine — but a warning on one is still worth a note. */
     function renderVerdict(checks) {
       const hEl = document.getElementById('ov-verdict-h');
       const sub = document.getElementById('ov-verdict-sub');
       const ic = document.getElementById('ov-verdict-ic');
       if (!hEl || !checks || !checks.length) return;
-      const st = worstState(checks);
+      const major = checks.filter(c => !c.minor);
+      const noted = checks.filter(c => c.minor && (c.state === 'warn' || c.state === 'crit'));
+      const st = worstState(major);
       const gradeM = ((checks.find(c => /latency under load/i.test(c.name)) || {}).value || '')
         .match(/\(([A-F][+-]?)\)/);
-      const bad = checks.filter(c => c.state === 'warn' || c.state === 'crit');
+      const bad = major.filter(c => c.state === 'warn' || c.state === 'crit');
       ic.dataset.state = st;
       hEl.dataset.state = st;
       if (st === 'ok') {
         hEl.textContent = gradeM ? 'All quiet — line health ' + gradeM[1] : 'All quiet';
-        sub.textContent = 'Your home network is running smoothly.';
+        sub.textContent = 'Your home network is running smoothly.' +
+          (noted.length ? ' Noted: ' + noted.map(c => c.name + ': ' + c.value).join(' · ') : '');
       } else if (st === 'unknown') {
         hEl.textContent = 'Waiting for the first health round…';
         sub.textContent = 'checks run every few seconds';
@@ -3787,23 +3822,26 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       const apModel = h(lastOrbi.model || 'Orbi router');
       const apSub = apReachable ? 'Access point · ' + routerN + ' client' + (routerN === 1 ? '' : 's') : 'not responding';
 
-      const satNodes = sats.map((s, i) => {
+      const satStack = sats.map((s, i) => {
         const k = (s.mac || '').toUpperCase();
         const off = s.online === false;
         const n = (perAp[k] || []).length;
-        return topoLink('topo-sat-' + i, off ? 'offline' : '', off) +
+        return '<span class="topo-sat-stub' + (off ? ' offline' : '') + '"></span>' +
           topoNode('clients', ICON_ROUTER, h(s.model || s.name || s.mac),
             off ? 'offline' : 'Satellite · ' + n + ' client' + (n === 1 ? '' : 's'),
             off ? 'offline' : '');
       }).join('');
 
+      nav.classList.toggle('has-sats', sats.length > 0);
       nav.innerHTML =
         topoNode('diag', ICON_GLOBE, 'Internet', 'Fiber · PPPoE') +
         topoLink('topo-wan-rate', '–') +
         topoNode('system', ICON_ROUTER, 'NanoPi R6C', 'Router · CAKE') +
         topoLink('topo-lan-rate', apReachable ? '–' : 'offline', !apReachable) +
-        topoNode('clients', ICON_ROUTER, apModel, apSub, apReachable ? '' : 'offline') +
-        satNodes +
+        '<span class="topo-stack">' +
+          topoNode('clients', ICON_ROUTER, apModel, apSub, apReachable ? '' : 'offline') +
+          '<span class="topo-sats">' + satStack + '</span>' +
+        '</span>' +
         topoLink('topo-wifi-rate', '–') +
         topoNode('clients', ICON_CLIENTS, onlineN + ' Clients', 'online now');
     }
@@ -3825,10 +3863,6 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       // rx_rate/tx_rate already count the transfer twice (client rx + ap
       // tx); halving keeps labels comparable with the WAN numbers.
       set('topo-lan-rate', topoRateHtml(sumRates(perAp.__router), sumRates(perAp.__router)));
-      Object.keys(satMacs).forEach((k, i) => {
-        const off = satMacs[k].online === false;
-        set('topo-sat-' + i, off ? 'offline' : topoRateHtml(sumRates(perAp[k]), sumRates(perAp[k])));
-      });
       const wifi = Object.keys(perAp).filter(k => k !== '__router' && !satMacs[k])
         .reduce((a, k) => a.concat(perAp[k]), []);
       set('topo-wifi-rate', topoRateHtml(sumRates(wifi), sumRates(wifi)));
@@ -3838,7 +3872,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     let lhRange = '24h';
     let lhCache = {};
     let lhPlot = null;
-    const LH_SUBS = { '6h': 'last 6 hours', '24h': 'last 24 hours', '7d': 'last 7 days', '30d': 'last 30 days' };
+    const LH_SUBS = { '1h': 'last hour', '6h': 'last 6 hours', '24h': 'last 24 hours', '7d': 'last 7 days', '30d': 'last 30 days' };
     async function loadLineHealth() {
       try {
         let d;
@@ -3864,6 +3898,62 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     }
 
     // ── Overview: gateway gauges, card renderers ──────────────────────────
+    /** Internet card chart for the selected window. 3h slices the shared
+     *  24h payload; 1h and custom windows fetch their own (finer) series. */
+    async function loadIntChart() {
+      try {
+        if (intRange === 'custom' && !intCustom) return;
+        const key = intRange === 'custom' ? 'c' + intCustom.from + '-' + intCustom.to : intRange;
+        const ttl = intRange === '1h' ? 60000 : 300000;
+        let d;
+        const cached = intCache[key];
+        if (cached && Date.now() - cached.at < ttl) {
+          d = cached.d;
+        } else if (intRange === '3h') {
+          if (!ovWanData || !ovWanData.t || ovWanData.t.length < 2) {
+            ovWanData = await fetch(appURL('/api/history/system?range=24h')).then(r => r.json());
+            ovWanAt = Date.now();
+          }
+          d = ovWanData;
+        } else if (intRange === '1h') {
+          d = await fetch(appURL('/api/history/system?range=1h')).then(r => r.json());
+        } else {
+          d = await fetch(appURL('/api/history/system?from=' + intCustom.from + '&to=' + intCustom.to)).then(r => r.json());
+        }
+        if (!d || !d.t) return;
+        intCache[key] = { d, at: Date.now() };
+        renderIntChart(d);
+      } catch (e) { console.error('[int-chart]', e); }
+    }
+
+    function renderIntChart(d) {
+      const cd = document.getElementById('ov-int-chart');
+      const sub = document.getElementById('ov-int-sub');
+      if (!cd || !d || !d.t || d.t.length < 2 || !isUPlotReady() || cd.offsetParent === null) return;
+      // Rebuild only when the payload behind the window changed.
+      const n = intRange === '3h' ? Math.min(36, d.t.length) : d.t.length;
+      const stamp = (d === ovWanData ? 'wan' + ovWanAt : 'p' + n + '-' + d.t[d.t.length - 1]);
+      if (stamp === ovIntAt) return;
+      ovIntAt = stamp;
+      if (sub) {
+        if (intRange === 'custom') {
+          const f = new Date(d.t[0] * 1000), t2 = new Date(d.t[d.t.length - 1] * 1000);
+          sub.textContent = f.toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) +
+            ' – ' + t2.toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+          sub.classList.remove('hidden');
+        } else {
+          sub.classList.add('hidden');
+        }
+      }
+      cd.innerHTML = '';
+      if (ovIntPlot) { try { ovIntPlot.destroy(); } catch (_) {} ovIntPlot = null; }
+      ovIntPlot = makeChart(cd, Math.max(200, cd.clientWidth - 4), 90,
+        d.t.slice(-n), [
+          { label: 'Download (Mbit/s)', data: (d.wanrx || []).slice(-n), stroke: cv('--dl'), fill: cva('--dl', 0.10) },
+          { label: 'Upload (Mbit/s)', data: (d.wantx || []).slice(-n), stroke: cv('--ul') },
+        ], '', v => v.toFixed(1), 'ov-x');
+    }
+
     function ovGauge(label, fmt, frac, state) {
       const pct = Math.max(2, Math.min(100, frac * 100));
       const col = state === 'crit' ? 'var(--lamp-crit)' : state === 'warn' ? 'var(--lamp-warn)' : 'var(--accent)';
@@ -3890,20 +3980,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         document.getElementById('ov-up').textContent = ovMbit(wanUp());
       }
 
-      // Mini 3h chart from the 5-minute system history (36 points).
-      const intChart = document.getElementById('ov-int-chart');
-      if (intChart && ovWanData && ovWanData.t && ovWanData.t.length >= 2
-          && isUPlotReady() && intChart.offsetParent !== null && ovWanAt !== ovIntAt) {
-        ovIntAt = ovWanAt;
-        const n = Math.min(36, ovWanData.t.length);
-        intChart.innerHTML = '';
-        if (ovIntPlot) { try { ovIntPlot.destroy(); } catch (_) {} ovIntPlot = null; }
-        ovIntPlot = makeChart(intChart, Math.max(200, intChart.clientWidth - 4), 90,
-          ovWanData.t.slice(-n), [
-            { label: 'Download (Mbit/s)', data: (ovWanData.wanrx || []).slice(-n), stroke: cv('--dl'), fill: cva('--dl', 0.10) },
-            { label: 'Upload (Mbit/s)', data: (ovWanData.wantx || []).slice(-n), stroke: cv('--ul') },
-          ], '', v => v.toFixed(1), 'ov-x');
-      }
+      // Internet card chart, following the selected window (1h/3h/custom).
+      loadIntChart();
 
       // Footer line from health checks.
       const hchecks = healthChecks || [];
@@ -4015,8 +4093,13 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
 
     function worstState(checks) {
       if (!checks.length) return 'unknown';
-      const order = { crit: 3, warn: 2, unknown: 0, ok: -1 };
-      return checks.reduce((w, c) => (order[c.state] ?? 0) > (order[w] ?? 0) ? c.state : w, 'ok');
+      // Checks with no data (e.g. firewall counters missing) are not a
+      // problem and must not drag the verdict down from ok — only a round
+      // where NOTHING has data yet counts as "waiting".
+      const rated = checks.filter(c => c.state !== 'unknown');
+      if (!rated.length) return 'unknown';
+      const order = { crit: 3, warn: 2, ok: -1 };
+      return rated.reduce((w, c) => order[c.state] > order[w] ? c.state : w, 'ok');
     }
 
     /** Billing-period usage per MAC, from /api/usage. Separate from the
@@ -4046,9 +4129,11 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       const rows = Object.keys(totals).map(mac => {
         const dev = orbiByMac[mac] || {};
         const cl = (ovClients || []).find(c => (c.mac || '').toUpperCase() === mac.toUpperCase());
-        const nm = dev.name && dev.name.toLowerCase() !== 'unknown' ? dev.name
-          : (cl && cl.name) || (cl && cl.ip) || (/^00:00:00/.test(mac.toUpperCase()) ? 'Untracked' : mac);
-        return { mac, name: nm, gb: totals[mac] };
+        const isUntracked = /^00:00:00/.test(mac.toUpperCase());
+        const nm = isUntracked ? 'Unattributed'
+          : dev.name && dev.name.toLowerCase() !== 'unknown' ? dev.name
+          : (cl && cl.name) || (cl && cl.ip) || mac;
+        return { mac, name: nm, gb: totals[mac], untracked: isUntracked };
       }).sort((a, b) => b.gb - a.gb);
       const total = rows.reduce((a, r) => a + r.gb, 0);
       document.getElementById('ov-donut-total').textContent = total >= 1 ? total.toFixed(0) + ' GB' : (total * 1024).toFixed(0) + ' MB';
@@ -4075,13 +4160,45 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       }).join('');
       legend.innerHTML = slices.map((s, i) => {
         const pct = total > 0 ? (s.gb / total * 100) : 0;
-        return '<div class="ov-usage-row">' +
+        // nlbwmon lumps everything it cannot tie to a device MAC under
+        // 00:00:00:00:00:00 — mostly the router's own traffic.
+        const isUnattr = s.untracked;
+        return '<div class="ov-usage-row"' + (isUnattr
+          ? ' title="Traffic the router could not tie to one device — mostly the router itself (DNS, NTP, speedtests, updates) plus anything without a known MAC"'
+          : '') + '>' +
           '<span class="ov-usage-dot" style="background:' + (DONUT_COLORS[i] || '#9aa4b2') + '"></span>' +
           '<span class="nm">' + h(s.name) + '</span>' +
           '<span class="gb">' + (s.gb >= 1 ? s.gb.toFixed(1) + ' GB' : (s.gb * 1024).toFixed(0) + ' MB') + '</span>' +
           '<span class="pc">' + pct.toFixed(0) + '%</span>' +
         '</div>';
       }).join('');
+    }
+
+    /** Best-effort device-type guess from the hostname — the router
+     *  exposes no device-class field, but names like "PS5", "Sony X90L",
+     *  "REDMI-NOTE-12-PRO-5G" or "M90Q" carry the type. Unnamed devices
+     *  (randomized MACs, "unknown") fall back to the monitor icon. */
+    function devKind(name) {
+      const n = (name || '').toLowerCase();
+      if (/ps[345]\b|playstation|xbox|nintendo|gamepad|console/.test(n)) return 'console';
+      if (/\btv\b|bravia|shield|apple\s?tv|appletv|fire\s?tv|chromecast|roku|projector|x\d{2}[a-z]/.test(n)) return 'tv';
+      if (/iphone|android|redmi|pixel|galaxy|poco|oneplus|nothing|oppo|vivo|realme|moto|huawei|honor|xiaomi|nokia|phone/.test(n)) return 'phone';
+      if (/ipad|tablet|kindle/.test(n)) return 'tablet';
+      if (/macbook|laptop|thinkpad|ideapad|notebook|desktop|thinkcentre|optiplex|elitebook|pavilion|m90q|\bpc\b|windows/.test(n)) return 'pc';
+      if (/plug|bulb|hue|echo|alexa|nest|\bcam\b|doorbell|sonoff|tasmota|tapo|printer|thermostat|vacuum|roborock/.test(n)) return 'iot';
+      return 'generic';
+    }
+    const DEV_SVGS = {
+      phone: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M12 18h.01"/>',
+      tablet: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M12 18h.01"/>',
+      tv: '<rect x="2" y="7" width="20" height="13" rx="2"/><path d="m17 2-5 5-5-5"/>',
+      console: '<line x1="6" x2="10" y1="12" y2="12"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="15" x2="15.01" y1="13" y2="13"/><line x1="18" x2="18.01" y1="11" y2="11"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/>',
+      iot: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2"/><path d="M15 2v2"/><path d="M9 20v2"/><path d="M15 20v2"/><path d="M2 9h2"/><path d="M2 15h2"/><path d="M20 9h2"/><path d="M20 15h2"/>',
+      pc: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 16v4"/>',
+      generic: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 16v4"/>',
+    };
+    function devIcon(c, size) {
+      return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + DEV_SVGS[devKind(c && c.name)] + '</svg>';
     }
 
     function renderTopClients(list) {
@@ -4096,7 +4213,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       el.innerHTML = top.map(c => {
         const gb = gbOf(c);
         const name = c.name || c.ip || c.mac;
-        const icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 16v4"/></svg>';
+        const icon = devIcon(c, 16);
         return '<button class="ov-top-row tr-client" tabindex="0" data-mac="' + h(c.mac) + '"' +
                ' data-name="' + h(name) + '" data-ip="' + h(c.ip) + '" data-vendor="' + h(c.vendor || '') + '"' +
                ' title="Open full connection history">' +
@@ -4183,10 +4300,10 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         return;
       }
       const onFor = d.on_for_s > 0 ? ' for ' + plugDur(d.on_for_s) : '';
-      const pwr = d.has_power ? ' · ' + Number(d.power_w).toFixed(1) + ' W' : '';
+      const pwr = d.has_power ? ' · <span class="num strong">' + Number(d.power_w).toFixed(1) + ' W</span>' : '';
       const rssi = d.rssi ? ' · ' + d.rssi + ' dBm' : '';
       el.innerHTML = lamp(d.on ? 'ok' : 'info') + ' ' + h(d.name || d.model || 'Plug') +
-        ' — ' + (d.on ? 'on' : 'off') + onFor + pwr + rssi;
+        ' — ' + (d.on ? 'on' : 'off') + onFor + ' · using' + pwr + rssi;
     }
     // WAN traffic chart — lives on the Diagnostics tab (line detail).
     // Rendered only while that tab is visible; uPlot needs layout width,
@@ -4225,6 +4342,35 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     document.getElementById('ov-wifi-open').addEventListener('click', () => setTab('clients'));
     document.getElementById('ov-gateway').addEventListener('click', () => setTab('system'));
     document.getElementById('ov-events-all').addEventListener('click', () => setTab('system'));
+    // Internet card chart window: presets refetch, Custom reveals from/to.
+    document.addEventListener('click', e => {
+      const b = e.target.closest('.intrange-btn');
+      if (!b) return;
+      intRange = b.dataset.intrange;
+      _setPillBtns('.intrange-btn', 'intrange', intRange);
+      document.getElementById('ov-int-custom').classList.toggle('hidden', intRange !== 'custom');
+      if (intRange === 'custom') {
+        const f = document.getElementById('ov-int-from'), t = document.getElementById('ov-int-to');
+        if (!f.value && !t.value) {          // sensible defaults: last 3 hours
+          const now = new Date();
+          f.value = new Date(now.getTime() - 3 * 3600 * 1000).toLocaleString('sv', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(' ', 'T');
+          t.value = now.toLocaleString('sv', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(' ', 'T');
+        }
+      } else {
+        loadIntChart();
+      }
+    });
+    document.getElementById('ov-int-apply').addEventListener('click', () => {
+      const f = document.getElementById('ov-int-from').value;
+      const t = document.getElementById('ov-int-to').value;
+      if (!f || !t) return;
+      const from = Math.floor(new Date(f).getTime() / 1000);
+      const to = Math.floor(new Date(t).getTime() / 1000);
+      if (!(from > 0 && to > from) || to - from > 31 * 24 * 3600) return;
+      intCustom = { from, to };
+      ovIntAt = ''; // force a rebuild for the new window
+      loadIntChart();
+    });
     // Health group pills jump to the tab that owns that category.
     document.addEventListener('click', e => {
       const gp = e.target.closest('[data-tab-jump]');
@@ -4237,6 +4383,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     _setPillBtns('.clrange-btn', 'clrange', clientsRange);
     _setPillBtns('.sysrange-btn', 'sysrange', sysRange);
     _setPillBtns('.incrange-btn', 'incrange', sysIncRange);
+    _setPillBtns('.intrange-btn', 'intrange', intRange);
     _setPillBtns('.wanrange-btn', 'wanrange', wanRange);
     _setPillBtns('.lhrange-btn', 'lhrange', lhRange);
     // Restore the tab the user was on before a reload (e.g. theme toggle).

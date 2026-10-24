@@ -17,13 +17,13 @@ import (
 // evalWarp judges the Cloudflare WARP exit tunnel. pbr runs with
 // strict_enforcement off, so when the tunnel dies, policy-routed clients
 // automatically fall back to the direct WAN line — the network keeps
-// working, but traffic changes path. That makes a dead tunnel a warning
-// ("your exit path changed"), not a critical ("internet is down").
+// working, just through a different path. That makes a dead tunnel an
+// informational note (Minor: "your exit path changed"), never a problem.
 func evalWarp(st sysmon.WarpState) Check {
 	name := "Exit path (WARP)"
 	if !st.Available {
-		return Check{Name: name, State: StateWarn, Value: "fallback",
-			Detail: "the WARP tunnel interface is gone — policy-routed clients are falling back to the direct WAN line. Internet keeps working through your ISP, but not through the tunnel. Check pbr/wireguard if this persists.", NumState: 1}
+		return Check{Name: name, State: StateWarn, Minor: true, Value: "fallback",
+			Detail: "the WARP tunnel interface is gone — policy-routed clients are falling back to the direct WAN line. Internet keeps working through your ISP, just not through the tunnel. Check pbr/wireguard if you want the tunnel back.", NumState: 1}
 	}
 
 	detail := func(hs time.Time) string {
@@ -31,24 +31,24 @@ func evalWarp(st sysmon.WarpState) Check {
 		if st.RxPerS > 1024 {
 			flow = fmt.Sprintf("~%s/s flowing in", humanBytes(st.RxPerS))
 		}
-		return fmt.Sprintf("Cloudflare WARP tunnel is healthy: last handshake %s ago, %s. Policy-routed clients exit through WARP; everything else uses the direct line. If the tunnel ever dies, those clients automatically fall back to the raw WAN and this chip turns amber so you know the path changed.",
+		return fmt.Sprintf("Cloudflare WARP tunnel is healthy: last handshake %s ago, %s. Policy-routed clients exit through WARP; everything else uses the direct line. If the tunnel ever dies, those clients automatically fall back to the raw WAN and this check notes the path change.",
 			trimAge(time.Since(hs)), flow)
 	}
 
 	if st.Handshake.IsZero() {
-		return Check{Name: name, State: StateWarn, Value: "no handshake",
+		return Check{Name: name, State: StateWarn, Minor: true, Value: "no handshake",
 			Detail: "the WARP tunnel interface is up but the remote peer has never completed a handshake — the tunnel is not passing traffic. Policy-routed clients fall back to the direct WAN line.", NumState: 1}
 	}
 
 	age := time.Since(st.Handshake)
 	switch {
 	case age < 3*time.Minute:
-		return Check{Name: name, State: StateOK, Value: "via WARP", Detail: detail(st.Handshake), NumState: 0}
+		return Check{Name: name, State: StateOK, Minor: true, Value: "via WARP", Detail: detail(st.Handshake), NumState: 0}
 	case age < 15*time.Minute:
-		return Check{Name: name, State: StateWarn, Value: fmt.Sprintf("quiet %s", trimAge(age)),
-			Detail: fmt.Sprintf("no WARP handshake for %s — the tunnel looks stalled. Policy-routed clients are (or will be) falling back to the direct WAN line. It may recover on its own; if this persists, the tunnel is down.", trimAge(age)), NumState: 1}
+		return Check{Name: name, State: StateWarn, Minor: true, Value: fmt.Sprintf("quiet %s", trimAge(age)),
+			Detail: fmt.Sprintf("no WARP handshake for %s — the tunnel looks stalled. Policy-routed clients are (or will be) falling back to the direct WAN line. It may recover on its own; if not, the tunnel is down and traffic just uses the direct line.", trimAge(age)), NumState: 1}
 	default:
-		return Check{Name: name, State: StateWarn, Value: "fallback",
+		return Check{Name: name, State: StateWarn, Minor: true, Value: "fallback",
 			Detail: fmt.Sprintf("WARP tunnel is down (no handshake for %s). Policy-routed clients have fallen back to the direct WAN line — internet keeps working, just not through the tunnel.", trimAge(age)), NumState: 1}
 	}
 }

@@ -279,10 +279,32 @@ type vmRangeSpec struct {
 
 var vmRanges = map[string]vmRangeSpec{
 	"1h":  {step: "15s", rateLimit: "2m"},
+	"3h":  {step: "30s", rateLimit: "3m"},
 	"6h":  {step: "60s", rateLimit: "4m"},
 	"24h": {step: "120s", rateLimit: "8m"},
 	"7d":  {step: "600s", rateLimit: "30m"},
 	"30d": {step: "1800s", rateLimit: "1h"},
+}
+
+// specForSpan picks a query step and rate window for an arbitrary span
+// (custom from/to windows). Roughly mirrors vmRanges' resolution curve:
+// ~1/240th of the span per point, clamped to the finest/coarsest specs.
+func specForSpan(span int64) vmRangeSpec {
+	step := span / 240
+	switch {
+	case step <= 15:
+		return vmRanges["1h"]
+	case step <= 30:
+		return vmRanges["3h"]
+	case step <= 60:
+		return vmRanges["6h"]
+	case step <= 120:
+		return vmRanges["24h"]
+	case step <= 600:
+		return vmRanges["7d"]
+	default:
+		return vmRanges["30d"]
+	}
 }
 
 // handleAPIHistoryVM serves long-range history assembled from VictoriaMetrics
@@ -746,17 +768,41 @@ func (s *Server) handleAPIHistoryWAN(c fiber.Ctx) error {
 }
 
 // handleAPIHistorySystem returns aligned system health history for a range.
+// Either ?range=1h|3h|6h|24h|7d|30d or an explicit custom window via
+// ?from=<unix>&to=<unix> (to defaults to now; span capped at 31 days).
 func (s *Server) handleAPIHistorySystem(c fiber.Ctx) error {
 	if s.vmc == nil {
 		return c.Status(503).SendString(`{"error":"victoriametrics not configured"}`)
 	}
-	rng := c.Query("range", "6h")
-	spec, ok := vmRanges[rng]
-	if !ok {
-		return c.Status(400).SendString(`{"error":"range must be one of 1h,6h,24h,7d,30d"}`)
+	var spec vmRangeSpec
+	var start, end int64
+	if fromQ := c.Query("from"); fromQ != "" {
+		from, err1 := strconv.ParseInt(fromQ, 10, 64)
+		to, err2 := strconv.ParseInt(c.Query("to"), 10, 64)
+		if err1 != nil || err2 != nil || from <= 0 || to <= 0 {
+			return c.Status(400).SendString(`{"error":"from and to must be unix seconds"}`)
+		}
+		if to > time.Now().Unix()+300 {
+			to = time.Now().Unix() + 300
+		}
+		span := to - from
+		if span < 120 {
+			return c.Status(400).SendString(`{"error":"window too short (min 2 minutes)"}`)
+		}
+		if span > 31*24*3600 {
+			return c.Status(400).SendString(`{"error":"window too long (max 31 days)"}`)
+		}
+		spec, start, end = specForSpan(span), from, to
+	} else {
+		rng := c.Query("range", "6h")
+		var ok bool
+		spec, ok = vmRanges[rng]
+		if !ok {
+			return c.Status(400).SendString(`{"error":"range must be one of 1h,3h,6h,24h,7d,30d"}`)
+		}
+		end = time.Now().Unix()
+		start = rangeStart(rng, end)
 	}
-	end := time.Now().Unix()
-	start := rangeStart(rng, end)
 	ctx := c.Context()
 
 	out := sysHistory{}
@@ -875,6 +921,8 @@ func rangeStart(rng string, end int64) int64 {
 	switch rng {
 	case "1h":
 		return end - 3600
+	case "3h":
+		return end - 3*3600
 	case "6h":
 		return end - 6*3600
 	case "24h":
