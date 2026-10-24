@@ -6,7 +6,7 @@
   <title>openwrt-view</title>
   <!-- PWA: installable on phones (manifest + icon served by the Go handler) -->
   <link rel="manifest" href="/manifest.webmanifest" />
-  <meta name="theme-color" content="#1f1e1b" />
+  <meta name="theme-color" content="#f7f8fa" />
   <link rel="apple-touch-icon" href="/icon-512.png" />
   <link rel="icon" type="image/png" href="/icon-512.png" />
   <!-- Everything below is inlined: the dashboard runs offline on the LAN.
@@ -29,25 +29,25 @@
        API the scripts read for chart strokes and state colours. */
     :root {
       color-scheme: light;
-      --ground:  #d6d1c6;   /* surround behind the unit */
-      --panel:   #e8e5de;   /* aluminum face */
-      --well:    #dedad1;   /* recessed: rails, wells, table heads */
-      --tape:    #f2efe7;   /* chart paper */
-      --groove:  #b3ac9f;   /* engraved line, shadow side */
-      --ridge:   #f8f6f1;   /* engraved line, lit side */
-      --hair:    #d2cdc2;   /* row separators inside a section */
-      --ink:     #1d1b17;   /* enamel text */
-      --ink-2:   #4a463e;
-      --ink-3:   #4f4a41;
-      --accent:  #824e0e;   /* signal amber, text-safe on the light face */
-      --accent-ink: #b06a1c;/* chart ink */
-      --on-accent: #fbf7ef;
-      --ok:      #2f6a27;  --warn: #765200;  --crit: #b0322a;
-      --lamp-ok: #5f9a45;  --lamp-warn: #e0a81e;  --lamp-crit: #d2443a;  --lamp-off: #bdb7ab;
+      --ground:  #f7f8fa;   /* app background */
+      --panel:   #ffffff;   /* card face */
+      --well:    #eef1f6;   /* recessed: rails, wells, table heads */
+      --tape:    #fbfdff;   /* chart paper */
+      --groove:  #e3e8ef;   /* card border */
+      --ridge:   #ffffff;   /* lit side of engraved lines */
+      --hair:    #e8edf3;   /* row separators inside a section */
+      --ink:     #16212e;   /* primary text */
+      --ink-2:   #51617a;
+      --ink-3:   #5e7089;
+      --accent:  #0069ff;   /* UniFi blue */
+      --accent-ink: #0069ff;
+      --on-accent: #ffffff;
+      --ok:      #16a34a;  --warn: #b45309;  --crit: #dc2626;
+      --lamp-ok: #22c55e;  --lamp-warn: #f5a623;  --lamp-crit: #e02020;  --lamp-off: #c2cdd9;
       --dl:      var(--accent-ink);   /* download series */
-      --ul:      #5d6f7d;             /* upload series: blued steel */
-      --scrim:   rgba(40, 36, 30, .45);
-      --lift:    0 18px 40px rgba(40, 32, 20, .22), 0 2px 6px rgba(40, 32, 20, .12);
+      --ul:      #16a34a;             /* upload series: green */
+      --scrim:   rgba(15, 23, 42, .45);
+      --lift:    0 1px 2px rgba(16, 24, 40, .06), 0 10px 24px rgba(16, 24, 40, .08);
       /* legacy aliases */
       --bg: var(--ground); --panel2: var(--well); --line: var(--groove); --head: var(--well);
       --text: var(--ink); --muted: var(--ink-2); --faint: var(--ink-3);
@@ -168,6 +168,55 @@
     .iface:first-child { border-top-color: transparent; }
     .iface .meter-click { display: block; padding: 0 var(--s5) var(--s4); }
     .tbl-hdr.border-t { border-top: 1px solid var(--groove); margin-top: var(--s3); }
+
+    /* ── Light theme (default): Concept-B floating cards ─────────────────
+       Sections become white cards with a soft shadow on the cool ground;
+       the engraved unit chrome above stays for the dark theme. */
+    html:not([data-theme="dark"]) .unit { background: transparent; border: 0; }
+    html:not([data-theme="dark"]) .top { background: transparent; border-bottom: 0; }
+    html:not([data-theme="dark"]) .sect { border: 1px solid var(--groove); border-radius: 14px;
+      background: var(--panel); box-shadow: var(--lift); margin-bottom: var(--s5); }
+    html:not([data-theme="dark"]) .sect:first-child,
+    html:not([data-theme="dark"]) .sect:last-child { border-color: var(--groove); }
+    html:not([data-theme="dark"]) .lampbank { background: transparent; border-bottom: 0; }
+    html:not([data-theme="dark"]) .lampcell { border: 1px solid var(--groove); border-radius: 12px;
+      box-shadow: var(--lift); }
+    html:not([data-theme="dark"]) .lampcell:hover { background: var(--tape); }
+
+    /* ── Overview hero: verdict headline + clickable topology ──────────── */
+    .ov-hero { display: flex; flex-direction: column; gap: var(--s4); }
+    .ov-verdict { display: flex; align-items: center; gap: var(--s3); }
+    .ov-verdict-ic { width: 40px; height: 40px; border-radius: 50%; flex: none;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: var(--well); color: var(--ink-2); }
+    .ov-verdict-ic::before { content: '…'; font-family: var(--f-num); font-size: 15px; font-weight: 700; }
+    .ov-verdict-ic[data-state="ok"]::before { content: '✓'; }
+    .ov-verdict-ic[data-state="warn"]::before, .ov-verdict-ic[data-state="crit"]::before { content: '!'; }
+    .ov-verdict-ic[data-state="ok"] { background: color-mix(in srgb, var(--lamp-ok) 16%, transparent); color: var(--ok); }
+    .ov-verdict-ic[data-state="warn"] { background: color-mix(in srgb, var(--lamp-warn) 20%, transparent); color: var(--warn); }
+    .ov-verdict-ic[data-state="crit"] { background: color-mix(in srgb, var(--lamp-crit) 15%, transparent); color: var(--crit); }
+    .ov-verdict-h { font-size: var(--t-xl); font-weight: 700; letter-spacing: -0.02em; color: var(--ink); line-height: 1.2; }
+    .ov-verdict-h[data-state="warn"] { color: var(--warn); }
+    .ov-verdict-h[data-state="crit"] { color: var(--crit); }
+    .ov-verdict-sub { font-size: var(--t-sm); color: var(--ink-2); margin-top: 2px; }
+    .ov-topo { display: flex; align-items: stretch; flex-wrap: wrap; row-gap: var(--s3); }
+    .topo-node { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+      background: var(--well); border: 1px solid var(--groove); border-radius: 12px;
+      text-align: left; min-width: 9.5rem; transition: border-color .15s, background .15s; }
+    .topo-node:hover { border-color: var(--accent); background: var(--tape); }
+    .topo-ic { color: var(--accent); display: inline-flex; }
+    .topo-txt { display: flex; flex-direction: column; min-width: 0; }
+    .topo-name { font-weight: 650; font-size: var(--t-sm); color: var(--ink); white-space: nowrap; }
+    .topo-sub { font-size: var(--t-xs); color: var(--ink-2); white-space: nowrap; }
+    .topo-node.offline { opacity: .55; border-style: dashed; }
+    .topo-node.offline .topo-ic { color: var(--ink-3); }
+    .topo-link { flex: 1 1 64px; min-width: 56px; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 3px; padding: 0 5px; }
+    .topo-link-line { width: 100%; height: 2px; border-radius: 1px;
+      background: linear-gradient(90deg, var(--groove), var(--accent)); opacity: .7; }
+    .topo-link.offline .topo-link-line {
+      background: repeating-linear-gradient(90deg, var(--lamp-off) 0 6px, transparent 6px 12px); }
+    .topo-rate { font-family: var(--f-num); font-size: var(--t-2xs); color: var(--ink-2); white-space: nowrap; }
 
     /* ── Lamp: incandescent indicator, state always paired with text ──── */
     .lamp { --c: var(--lamp-off); display: inline-block; width: 10px; height: 10px; border-radius: 50%;
@@ -465,8 +514,8 @@
     // Dark (the evening panel) is the default.
     try {
       const t = localStorage.getItem('openwrtview-theme');
-      document.documentElement.dataset.theme = (t === 'light' || t === 'dark') ? t : 'dark';
-    } catch (_) { document.documentElement.dataset.theme = 'dark'; }
+      document.documentElement.dataset.theme = (t === 'light' || t === 'dark') ? t : 'light';
+    } catch (_) { document.documentElement.dataset.theme = 'light'; }
   </script>
 </head>
 
@@ -524,6 +573,32 @@
 
     <!-- ═══ Tab: Overview ═══════════════════════════════════════════════ -->
     <section id="tab-overview" role="tabpanel" class="hidden">
+
+      <!-- Verdict: one plain-words headline + live topology, both tappable -->
+      <section class="sect ov-hero">
+        <div class="ov-verdict">
+          <span class="ov-verdict-ic" id="ov-verdict-ic"></span>
+          <div class="ov-verdict-txt">
+            <h1 class="ov-verdict-h" id="ov-verdict-h">Checking line health…</h1>
+            <p class="ov-verdict-sub" id="ov-verdict-sub">&nbsp;</p>
+          </div>
+        </div>
+        <nav id="ov-topo" class="ov-topo" aria-label="Network topology"></nav>
+      </section>
+
+      <!-- Line health: WAN latency over the chosen window -->
+      <section class="sect" id="ov-lh-sect">
+        <div class="sect-head">
+          <h2 class="h2">Line health <span class="sub" id="ov-lh-sub">WAN latency, last 24 hours</span></h2>
+          <div id="lh-ranges" class="seg" role="group" aria-label="Line health window">
+            <button data-lhrange="6h" class="lhrange-btn">6H</button>
+            <button data-lhrange="24h" class="lhrange-btn on">24H</button>
+            <button data-lhrange="7d" class="lhrange-btn">7D</button>
+            <button data-lhrange="30d" class="lhrange-btn">30D</button>
+          </div>
+        </div>
+        <div id="ov-lhchart"></div>
+      </section>
 
       <!-- Throughput instrument: live readout beside the paper tape -->
       <div class="sect instrument" style="padding:0">
@@ -1832,6 +1907,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         pollOverview();
         loadOvIncidents();
         loadRadio();
+        loadLineHealth();
         if (!tabTimers.overview) tabTimers.overview = [setInterval(pollOverview, 10000), setInterval(loadOvIncidents, 60000),
           setInterval(loadRadio, 30000)];
       } else if (name === 'trends') {
@@ -1981,6 +2057,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         lastOrbi = d;
         renderLamps();
         renderOverviewWifi(d);
+        renderTopology();
         loadWifiSpark();
         trackRadioEnv(d);
         renderRadio();
@@ -2443,6 +2520,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       }
       const wr = e.target.closest('.wanrange-btn');
       if (wr) { wanRange = wr.dataset.wanrange; _setPillBtns('.wanrange-btn', 'wanrange', wanRange); loadDiagWanChart(); }
+      const lr = e.target.closest('.lhrange-btn');
+      if (lr) { lhRange = lr.dataset.lhrange; _setPillBtns('.lhrange-btn', 'lhrange', lhRange); loadLineHealth(); }
       const ir = e.target.closest('.incrange-btn');
       if (ir) { sysIncRange = ir.dataset.incrange; _setPillBtns('.incrange-btn', 'incrange', sysIncRange); loadIncidents(); }
       const cr = e.target.closest('.crange-btn');
@@ -3544,6 +3623,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           const checks = await r.json();
           healthChecks = checks;   // overview footer reads this
           renderHealth(checks);
+          renderVerdict(checks);
+          tickTopoRates();
         }
       } catch (e) { /* transient — bar just stays stale */ }
       // The lamp bank is on every tab: keep its event and mesh sources fresh.
@@ -3596,6 +3677,129 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (bps == null || isNaN(bps)) return '–';
       const mb = bps * 8 / 1e6;
       return mb >= 100 ? mb.toFixed(0) : mb >= 10 ? mb.toFixed(1) : mb.toFixed(2);
+    }
+
+    // ── Overview hero: verdict, topology, line health ─────────────────────
+
+    /** One plain-words headline from the live health checks. */
+    function renderVerdict(checks) {
+      const h = document.getElementById('ov-verdict-h');
+      const sub = document.getElementById('ov-verdict-sub');
+      const ic = document.getElementById('ov-verdict-ic');
+      if (!h || !checks || !checks.length) return;
+      const st = worstState(checks);
+      const gradeM = ((checks.find(c => /latency under load/i.test(c.name)) || {}).value || '')
+        .match(/\(([A-F][+-]?)\)/);
+      const bad = checks.filter(c => c.state === 'warn' || c.state === 'crit');
+      ic.dataset.state = st;
+      h.dataset.state = st;
+      if (st === 'ok') {
+        h.textContent = gradeM ? 'Line is healthy — bufferbloat grade ' + gradeM[1] : 'Line is healthy';
+        const ping = (checks.find(c => /internet response/i.test(c.name)) || {}).value || '';
+        sub.textContent = (ping ? ping + ' · ' : '') + 'every check within target, shaping active';
+      } else if (st === 'unknown') {
+        h.textContent = 'Waiting for the first health round…';
+        sub.textContent = 'checks run every few seconds';
+      } else {
+        h.textContent = st === 'crit' ? 'Something needs attention' : 'Worth a look';
+        sub.textContent = bad.map(c => c.name + ': ' + c.value).join(' · ') || 'see the checks below';
+      }
+    }
+
+    /** Topology strip: Internet → gateway → AP units → clients. Built from
+     *  the last Orbi snapshot — a powered-off satellite renders dimmed and
+     *  dashed, wired clients count onto the router unit. Nodes drill into
+     *  their tabs via data-tab-jump; rates refresh from SSE separately. */
+    const ICON_GLOBE = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
+    const ICON_CLIENTS = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+
+    function topoNode(gotoTab, icon, name, sub, cls) {
+      return '<button class="topo-node' + (cls ? ' ' + cls : '') + '" data-tab-jump="' + gotoTab + '">' +
+        '<span class="topo-ic">' + icon + '</span>' +
+        '<span class="topo-txt"><span class="topo-name">' + name + '</span>' +
+        '<span class="topo-sub">' + sub + '</span></span></button>';
+    }
+    function topoLink(id, label, offline) {
+      return '<span class="topo-link' + (offline ? ' offline' : '') + '"><span class="topo-link-line"></span>' +
+        '<span class="topo-rate" id="' + id + '">' + label + '</span></span>';
+    }
+
+    function renderTopology() {
+      const nav = document.getElementById('ov-topo');
+      if (!nav || !lastOrbi) return;
+      const devs = lastOrbi.devices || [];
+      const sats = lastOrbi.satellites || [];
+      const apReachable = !!lastOrbi.reachable;
+      const satMacs = {};
+      sats.forEach(s => { satMacs[(s.mac || '').toUpperCase()] = s; });
+      // Wi-Fi clients report which unit they associate through; anything
+      // that is not a satellite MAC is the Orbi router itself. Wired
+      // clients hang off the router unit too.
+      const perAp = {};
+      devs.filter(x => x.contype === '2.4G' || x.contype === '5G').forEach(x => {
+        const k = (x.conn_orbi || '').toUpperCase();
+        (perAp[k] = perAp[k] || []).push(x);
+      });
+      const routerN = devs.filter(x => x.contype === 'wired').length +
+        Object.keys(perAp).filter(k => !satMacs[k]).reduce((a, k) => a + perAp[k].length, 0);
+
+      const satNodes = sats.map(s => {
+        const k = (s.mac || '').toUpperCase();
+        const off = s.online === false;
+        const n = (perAp[k] || []).length;
+        return topoLink('topo-sat-' + k.slice(-5), off ? 'offline' : n + ' client' + (n === 1 ? '' : 's'), off) +
+          topoNode('clients', ICON_ROUTER, h(s.model || s.name || s.mac),
+            off ? 'offline' : (s.backhaul_rssi ? 'backhaul ' + s.backhaul_rssi + ' dBm' : 'satellite'),
+            off ? 'offline' : '');
+      }).join('');
+
+      nav.innerHTML =
+        topoNode('diag', ICON_GLOBE, 'Internet', 'PPPoE · WAN') +
+        topoLink('topo-wan-rate', '–') +
+        topoNode('system', ICON_ROUTER, 'Gateway', 'OpenWrt · CAKE') +
+        topoLink('topo-ap-rate', apReachable ? '1 GbE' : 'offline', !apReachable) +
+        topoNode('clients', ICON_ROUTER, h(lastOrbi.model || 'Orbi router'),
+          apReachable ? 'router unit' : 'not responding', apReachable ? '' : 'offline') +
+        satNodes +
+        topoLink('topo-cl-rate', routerN + ' wired+wifi') +
+        topoNode('clients', ICON_CLIENTS, devs.length + ' clients', 'tap for details');
+    }
+
+    /** Cheap SSE-side refresh: WAN rate label only, no DOM rebuild. */
+    function tickTopoRates() {
+      const el = document.getElementById('topo-wan-rate');
+      if (el && latestIfaces.length) {
+        el.textContent = ovMbit(wanDown()) + ' ↓ · ' + ovMbit(wanUp()) + ' ↑ Mbps';
+      }
+    }
+
+    // Line health: WAN latency history from collectd ping probes.
+    let lhRange = '24h';
+    let lhCache = {};
+    let lhPlot = null;
+    const LH_SUBS = { '6h': 'last 6 hours', '24h': 'last 24 hours', '7d': 'last 7 days', '30d': 'last 30 days' };
+    async function loadLineHealth() {
+      try {
+        let d;
+        const c = lhCache[lhRange];
+        if (c && Date.now() - c.at < 60000) {
+          d = c.d;
+        } else {
+          d = await fetch(appURL('/api/history/wan?range=' + lhRange)).then(r => r.json());
+          lhCache[lhRange] = { d, at: Date.now() };
+        }
+        if (!d || !d.t || d.t.length < 2 || !isUPlotReady()) return;
+        const sub = document.getElementById('ov-lh-sub');
+        if (sub) sub.textContent = 'WAN latency, ' + (LH_SUBS[lhRange] || lhRange);
+        const cd = document.getElementById('ov-lhchart');
+        if (!cd || cd.offsetParent === null) return; // tab hidden
+        const W = Math.max(200, cd.clientWidth - 4);
+        cd.innerHTML = ''; // makeChart appends; clear so re-renders don't stack
+        if (lhPlot) { try { lhPlot.destroy(); } catch (_) {} lhPlot = null; }
+        lhPlot = makeChart(cd, W, 150, d.t, [
+          { label: 'WAN latency (ms)', data: d.rtt_ms, stroke: cv('--dl'), fill: cva('--ok', 0.10) },
+        ], '', v => v == null ? '' : v.toFixed(1), 'ov-x');
+      } catch (_) { /* transient — the chart stays stale */ }
     }
 
     // ── Paper tape: the WAN throughput strip chart ────────────────────────
@@ -3716,6 +3920,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     function renderOverview() {
       // Readout from live SSE stats; 3h/24h tape follows the history payload.
       updateTape(false);
+      tickTopoRates();
 
       // Footer line from health checks.
       const hchecks = healthChecks || [];
@@ -3902,6 +4107,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     _setPillBtns('.tape-btn', 'tape', tapeRange);
     _setPillBtns('.incrange-btn', 'incrange', sysIncRange);
     _setPillBtns('.wanrange-btn', 'wanrange', wanRange);
+    _setPillBtns('.lhrange-btn', 'lhrange', lhRange);
     // Restore the tab the user was on before a reload (e.g. theme toggle).
     let bootTab = 'overview';
     try { bootTab = sessionStorage.getItem('openwrtview-tab') || 'overview'; } catch (_) {}
