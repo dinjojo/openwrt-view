@@ -583,7 +583,7 @@ func (p *Poller) diffEvents(devs []Device) {
 	for mac, key := range prev {
 		ct, _, _ := strings.Cut(key, "|")
 		if isWiFi(ct) && now[mac] == "" {
-			p.onEvent("orbi", "info", "Wi-Fi client left: "+mac+" (was on "+band(ct)+")")
+			p.onEvent("orbi", "info", "Wi-Fi client left: "+p.leftLabel(mac)+" (was on "+band(ct)+")")
 		}
 	}
 }
@@ -800,6 +800,20 @@ func (p *Poller) clientName(d Device) string {
 		}
 	}
 	return displayName(d)
+}
+
+// leftLabel labels a Wi-Fi client that has already left the mesh. Only the
+// MAC survives in the previous-state map, so resolve it through the panel's
+// name sources and keep the MAC visible for matching; unknown MACs fall back
+// to the lowercase MAC, consistent with the other event messages.
+func (p *Poller) leftLabel(mac string) string {
+	low := strings.ToLower(mac)
+	if p.nameFor != nil {
+		if n := strings.TrimSpace(p.nameFor(low)); n != "" && !strings.EqualFold(n, low) && !strings.HasPrefix(strings.ToLower(n), "device-") {
+			return n + " (" + low + ")"
+		}
+	}
+	return low
 }
 
 func displayName(d Device) string {

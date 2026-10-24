@@ -62,11 +62,17 @@ func TestDiffEvents(t *testing.T) {
 		{"roam to satellite", []Device{sat, with(laptop, "2.4G", "SAT"), desk, phone},
 			[]string{"Laptop (aa:01) roamed from unknown to RBS50"}},
 		{"wifi leave, wired leave silent", []Device{sat, with(laptop, "2.4G", "SAT")},
-			[]string{"Wi-Fi client left: AA:02 (was on 2.4 GHz)"}},
+			[]string{"Wi-Fi client left: Phone (aa:02) (was on 2.4 GHz)"}},
 		{"no change", []Device{sat, with(laptop, "2.4G", "SAT")}, nil},
 	}
 	var log eventLog
 	p := New("http://orbi", "admin", "pw", log.hook)
+	p.SetNameResolver(func(mac string) string {
+		if strings.EqualFold(mac, "aa:02") {
+			return "Phone"
+		}
+		return mac
+	})
 	for _, s := range steps {
 		log.reset()
 		p.diffEvents(s.devs)
