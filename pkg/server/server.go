@@ -110,6 +110,7 @@ func New(addr string, interval time.Duration, histCap int, vmURL, version string
 	app.Get("/api/stats", s.handleAPIStats)
 	app.Get("/api/history", s.handleAPIHistory)
 	app.Get("/api/history/vm", s.handleAPIHistoryVM)
+	app.Get("/api/history/wan", s.handleAPIHistoryWAN)
 	app.Get("/api/history/system", s.handleAPIHistorySystem)
 	app.Get("/api/history/clients", s.handleAPIHistoryClients)
 	app.Get("/api/history/orbi", s.handleAPIHistoryOrbi)
@@ -697,6 +698,51 @@ type sysHistory struct {
 	TotalUp    float64 `json:"totalup"`    // GB
 	ShapedDown float64 `json:"shapeddown"` // provisioned Mbit/s from SQM
 	ShapedUp   float64 `json:"shapedup"`   // Mbit/s
+}
+
+// wanHistory is the Overview line-health hero payload: WAN round-trip time
+// and packet loss over a long window, sampled from the VictoriaMetrics store
+// (collectd's ping plugin, averaged across probe targets).
+type wanHistory struct {
+	T       []int64   `json:"t"`
+	RTTMS   []float64 `json:"rtt_ms"`
+	LossPct []float64 `json:"loss_pct"` // parallel to T; empty when unknown
+}
+
+var wanRangeDur = map[string]int64{
+	"1h": 3600, "6h": 6 * 3600, "24h": 24 * 3600, "7d": 7 * 24 * 3600, "30d": 30 * 24 * 3600,
+}
+
+func (s *Server) handleAPIHistoryWAN(c fiber.Ctx) error {
+	if s.vmc == nil {
+		return c.Status(503).SendString(`{"error":"victoriametrics not configured"}`)
+	}
+	rng := c.Query("range", "24h")
+	dur, ok := wanRangeDur[rng]
+	if !ok {
+		return c.Status(400).SendString(`{"error":"range must be one of 1h,6h,24h,7d,30d"}`)
+	}
+	spec := vmRanges[rng]
+	end := time.Now().Unix()
+	start := end - dur
+
+	ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
+	defer cancel()
+
+	out := wanHistory{}
+	if se, err := s.vmc.QueryRange(ctx, `avg(collectd_ping)`, start, end, spec.step); err == nil && len(se) > 0 {
+		out.T, out.RTTMS = se[0].TS, se[0].Val
+	}
+	if se, err := s.vmc.QueryRange(ctx, `avg(collectd_ping_ping_droprate)`, start, end, spec.step); err == nil && len(se) > 0 {
+		loss := se[0].Val
+		out.LossPct = make([]float64, len(loss))
+		for i, v := range loss {
+			out.LossPct[i] = v * 100
+		}
+	}
+	c.Set("Content-Type", "application/json; charset=utf-8")
+	b, _ := json.Marshal(out)
+	return c.Send(b)
 }
 
 // handleAPIHistorySystem returns aligned system health history for a range.
