@@ -1,6 +1,7 @@
 package health
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -185,6 +186,11 @@ func TestEvalQueue(t *testing.T) {
 	q := func(name string, pk float64) types.CakeStats {
 		return types.CakeStats{Interface: name, MaxPkDelayMs: pk}
 	}
+	// busy is an interface pinned at its shaper rate.
+	busy := func(name string, pk, mbits float64) types.CakeStats {
+		return types.CakeStats{Interface: name, MaxPkDelayMs: pk,
+			Bandwidth: fmt.Sprintf("%.0fMbit", mbits), TxBytesPerS: mbits * 1e6 / 8}
+	}
 	cases := []struct {
 		name string
 		in   []types.CakeStats
@@ -201,6 +207,18 @@ func TestEvalQueue(t *testing.T) {
 		{"boundary 30 ms is crit", []types.CakeStats{q("eth0", 30)}, want{state: StateCrit}},
 		{"all delays zero names the interfaces", []types.CakeStats{q("eth0", 0), q("ifb4eth0", 0)},
 			want{state: StateOK, value: "peak 0.00 ms", contains: []string{"on eth0, ifb4eth0", "well under"}, absent: []string{"on  "}}},
+		// At full speed a peak above the 5 ms target is the shaper pacing
+		// traffic — expected, so the check stays green and says so.
+		{"saturated 8 ms peak is the shaper working", []types.CakeStats{busy("ifb4eth0", 8.08, 415)},
+			want{state: StateOK, value: "peak 8.08 ms · line is at 100% of its shaper",
+				contains: []string{"shaper pacing traffic, not a fault"}}},
+		{"saturated boundary 30 ms still warns", []types.CakeStats{busy("eth0", 30, 400)},
+			want{state: StateWarn, contains: []string{"above the 5 ms target"}}},
+		{"saturated 100 ms is crit", []types.CakeStats{busy("eth0", 100, 400)},
+			want{state: StateCrit, contains: []string{"far above target"}}},
+		{"moderate load keeps strict thresholds", []types.CakeStats{types.CakeStats{Interface: "eth0",
+			MaxPkDelayMs: 8, Bandwidth: "400Mbit", TxBytesPerS: 100e6 / 8}},
+			want{state: StateWarn, value: "peak 8.00 ms"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

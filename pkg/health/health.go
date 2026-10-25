@@ -681,7 +681,10 @@ func median(v []float64) float64 {
 }
 
 // evalQueue judges the live CAKE queue: peak delay vs the configured target
-// (5 ms default) and any backlog.
+// (5 ms default) and any backlog. At full speed some queueing is the shaper
+// pacing traffic — the same policy as the latency-under-load episode rule:
+// peaks are only judged against the target when the line is not saturated
+// (below 70% of the configured shaper rate).
 func evalQueue(live []types.CakeStats) Check {
 	name := "Traffic queue"
 	if len(live) == 0 {
@@ -689,19 +692,34 @@ func evalQueue(live []types.CakeStats) Check {
 	}
 	maxPk := 0.0
 	iface := ""
+	worstUtil := 0.0
 	for _, cs := range live {
+		u := 0.0
+		if shaped := shapedBits(cs.Bandwidth); shaped > 0 {
+			u = cs.TxBytesPerS * 8 / shaped * 100
+		}
 		if cs.MaxPkDelayMs > maxPk {
 			maxPk = cs.MaxPkDelayMs
 			iface = cs.Interface
+			worstUtil = u
 		}
+	}
+	// Under saturation a healthy shaper holds a non-empty queue; a brief
+	// peak above the 5 ms target there is expected, so only flag peaks that
+	// mean the shaper is genuinely failing to hold latency.
+	saturated := worstUtil >= 70
+	warnAt, critAt := 5.0, 30.0
+	if saturated {
+		warnAt, critAt = 30.0, 100.0
 	}
 	state := StateOK
 	switch {
-	case maxPk >= 30:
+	case maxPk >= critAt:
 		state = StateCrit
-	case maxPk >= 5:
+	case maxPk >= warnAt:
 		state = StateWarn
 	}
+	load := fmt.Sprintf("line is at %.0f%% of its shaper", worstUtil)
 	val := fmt.Sprintf("peak %.2f ms", maxPk)
 	var detail string
 	if iface == "" {
@@ -712,13 +730,17 @@ func evalQueue(live []types.CakeStats) Check {
 			names = append(names, cs.Interface)
 		}
 		detail = fmt.Sprintf("packets are not waiting in the queue at all on %s — well under the 5 ms target, no bufferbloat", strings.Join(names, ", "))
-	} else {
-		detail = fmt.Sprintf("packets wait at most %.2f ms in the queue on %s — well under the 5 ms target, no bufferbloat", maxPk, iface)
-	}
-	if state == StateWarn {
+	} else if state == StateWarn {
 		detail = fmt.Sprintf("packets wait up to %.2f ms in the queue on %s — above the 5 ms target, so video calls may feel laggy while the line is busy", maxPk, iface)
 	} else if state == StateCrit {
 		detail = fmt.Sprintf("packets wait up to %.2f ms in the queue on %s — far above target; the shaper is not holding latency down, check SQM settings", maxPk, iface)
+	} else if saturated {
+		detail = fmt.Sprintf("%s and packets wait at most %.2f ms — at full speed a short peak above the 5 ms target is the shaper pacing traffic, not a fault", load, maxPk)
+	} else {
+		detail = fmt.Sprintf("packets wait at most %.2f ms in the queue on %s — well under the 5 ms target, no bufferbloat", maxPk, iface)
+	}
+	if saturated {
+		val += fmt.Sprintf(" · %s", load)
 	}
 	return Check{Name: name, State: state, Value: val, Detail: detail, NumState: numState(state)}
 }
