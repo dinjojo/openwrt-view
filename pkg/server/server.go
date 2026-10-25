@@ -778,12 +778,37 @@ func (s *Server) handleAPIUsageWindow(c fiber.Ctx) error {
 		RxGB float64 `json:"rx_gb"`
 		TxGB float64 `json:"tx_gb"`
 	}
+	// WAN-level traffic over the same window. Traffic that never crosses
+	// a LAN client counter (WARP tunnel keepalives and reconnects, DNS,
+	// NTP, monitoring pushes, the router itself) is invisible to
+	// nlbwmon, so an idle-looking window can still carry real WAN volume.
+	var wanRx, wanTx float64
+	for _, wq := range []struct {
+		prop string
+		dest *float64
+	}{{"receive", &wanRx}, {"transmit", &wanTx}} {
+		series, err := s.vmc.QueryRange(ctx,
+			`sum(rate(node_network_`+wq.prop+`_bytes_total{device="pppoe-wan"}[`+wl+`]))`,
+			rateStart, end, spec.step)
+		if err != nil {
+			continue
+		}
+		for _, sr := range series {
+			for _, v := range sr.Val {
+				*wq.dest += v * spec.stepSeconds()
+			}
+		}
+	}
 	out := struct {
-		Start   int64                  `json:"start"`
-		End     int64                  `json:"end"`
-		Step    string                 `json:"step"`
-		Clients map[string]*cliTotals  `json:"clients"`
+		Start   int64                 `json:"start"`
+		End     int64                 `json:"end"`
+		Step    string                `json:"step"`
+		WanRxGB float64               `json:"wan_rx_gb"`
+		WanTxGB float64               `json:"wan_tx_gb"`
+		Clients map[string]*cliTotals `json:"clients"`
 	}{Start: start, End: end, Step: spec.step, Clients: map[string]*cliTotals{}}
+	out.WanRxGB = wanRx / 1e9
+	out.WanTxGB = wanTx / 1e9
 	for mac, a := range aggs {
 		out.Clients[mac] = &cliTotals{RxGB: a.rx / 1e9, TxGB: a.tx / 1e9}
 	}

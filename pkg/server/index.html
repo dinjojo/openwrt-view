@@ -266,6 +266,10 @@
       background: linear-gradient(180deg, var(--accent), var(--groove)); opacity: .6; }
     .topo-sat-stub.offline { background: repeating-linear-gradient(180deg, var(--lamp-off) 0 6px, transparent 6px 12px); }
 
+    /* Global window toolbar */
+    .ov-winbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 4px 2px; margin-bottom: var(--s2); }
+
     /* Internet card */
     .ov-big { display: flex; gap: var(--s6); }
     .ov-big-num { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
@@ -725,23 +729,28 @@
         <nav id="ov-topo" class="ov-topo" aria-label="Network topology"></nav>
       </section>
 
+      <!-- Global window toolbar: drives every time-based panel below -->
+      <div class="ov-winbar" id="ov-winbar">
+        <span class="ov-cap-t">Window</span>
+        <span id="ov-int-ranges" class="seg" role="group" aria-label="Dashboard window">
+          <button data-intrange="billing" class="intrange-btn on">Period</button>
+          <button data-intrange="1h" class="intrange-btn">1H</button>
+          <button data-intrange="3h" class="intrange-btn">3H</button>
+          <button data-intrange="custom" class="intrange-btn">Custom</button>
+        </span>
+        <span id="ov-int-custom" class="hidden" style="display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center">
+          <input type="datetime-local" id="ov-int-from" class="input" style="width:11rem;padding:2px 6px;font-size:var(--t-xs)" aria-label="From">
+          <span class="xs muted">–</span>
+          <input type="datetime-local" id="ov-int-to" class="input" style="width:11rem;padding:2px 6px;font-size:var(--t-xs)" aria-label="To">
+          <button id="ov-int-apply" style="border:1px solid var(--groove);background:var(--well);color:var(--ink-2);border-radius:3px;padding:3px 9px;font-size:var(--t-xs);font-family:var(--f-num)">Apply</button>
+        </span>
+        <span id="ov-int-sub" class="xs muted hidden"></span>
+      </div>
+
       <!-- Row 1: Internet · Gateway · Network -->
       <div class="ov-grid ov-g3">
         <section class="sect ov-card">
-          <div class="ov-card-cap"><span class="ov-cap-t">Internet</span>
-            <span id="ov-int-ranges" class="seg" role="group" aria-label="Dashboard window">
-              <button data-intrange="billing" class="intrange-btn on">Period</button>
-              <button data-intrange="1h" class="intrange-btn">1H</button>
-              <button data-intrange="3h" class="intrange-btn">3H</button>
-              <button data-intrange="custom" class="intrange-btn">Custom</button>
-            </span></div>
-          <div id="ov-int-custom" class="hidden" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px">
-            <input type="datetime-local" id="ov-int-from" class="input" style="width:11rem;padding:2px 6px;font-size:var(--t-xs)" aria-label="From">
-            <span class="xs muted">–</span>
-            <input type="datetime-local" id="ov-int-to" class="input" style="width:11rem;padding:2px 6px;font-size:var(--t-xs)" aria-label="To">
-            <button id="ov-int-apply" style="border:1px solid var(--groove);background:var(--well);color:var(--ink-2);border-radius:3px;padding:3px 9px;font-size:var(--t-xs);font-family:var(--f-num)">Apply</button>
-          </div>
-          <span id="ov-int-sub" class="xs muted hidden"></span>
+          <div class="ov-card-cap"><span class="ov-cap-t">Internet</span></div>
           <div class="ov-big">
             <div class="ov-big-cell"><div class="ov-big-num ov-dl" id="ov-down">–</div>
               <div class="ov-big-lab"><span class="ov-arrow dl">↓</span> Mbps down</div></div>
@@ -3789,7 +3798,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           const q = intRange === 'custom' ? 'from=' + intCustom.from + '&to=' + intCustom.to : 'range=' + intRange;
           const d = await fetch(appURL('/api/usage/window?' + q)).then(r => r.json());
           if (d && d.clients) {
-            winUsage = { clients: d.clients, at: Date.now() };
+            winUsage = { clients: d.clients, wanRx: d.wan_rx_gb || 0, wanTx: d.wan_tx_gb || 0, at: Date.now() };
             winCache[key] = winUsage;
           }
         }
@@ -4254,9 +4263,18 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       }).sort((a, b) => b.gb - a.gb);
       const total = rows.reduce((a, r) => a + r.gb, 0);
       document.getElementById('ov-donut-total').textContent = total >= 1 ? total.toFixed(0) + ' GB' : (total * 1024).toFixed(0) + ' MB';
-      if (!rows.length) {
+      if (!rows.length || (winActive() && total === 0)) {
+        // An empty window (e.g. an idle hour) is a message, not zero-rows.
+        // When the WAN itself carried traffic that no client counter saw
+        // (WARP keepalives, DNS, NTP — router-level, not attributable to
+        // a device), say so instead of a bare "no traffic".
+        let emptyMsg = winActive() ? 'No per-device traffic in this window.' : 'No usage recorded yet this period.';
+        if (winActive() && winUsage) {
+          const wan = (winUsage.wanRx || 0) + (winUsage.wanTx || 0);
+          if (wan >= 0.001) emptyMsg += ' WAN moved ' + (wan >= 1 ? wan.toFixed(1) + ' GB' : (wan * 1024).toFixed(0) + ' MB') + ' (router/WARP background — not tied to a device).';
+        }
         svg.innerHTML = '';
-        legend.innerHTML = '<div class="ov-usage-row"><span class="nm">No usage recorded yet this period.</span></div>';
+        legend.innerHTML = '<div class="ov-usage-row"><span class="nm">' + emptyMsg + '</span></div>';
         return;
       }
       // Top 4 slices, the rest folded into "Other".
@@ -4330,6 +4348,13 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       const gbOf = c => totals ? (totals[(c.mac || '').toUpperCase()] || 0) : (c.rx_total + c.tx_total) / 1024 ** 3;
       const top = online.slice().sort((a, b) => gbOf(b) - gbOf(a)).slice(0, 5);
       const max = Math.max(...top.map(gbOf), 0.001);
+      if (winActive() && winUsage && top.every(c => gbOf(c) === 0)) {
+        let emptyMsg = 'No traffic in this window.';
+        const wan = (winUsage.wanRx || 0) + (winUsage.wanTx || 0);
+        if (wan >= 0.001) emptyMsg = 'No per-device traffic. WAN moved ' + (wan >= 1 ? wan.toFixed(1) + ' GB' : (wan * 1024).toFixed(0) + ' MB') + ' (router/WARP background).';
+        el.innerHTML = '<p class="lrow sm muted">' + emptyMsg + '</p>';
+        return;
+      }
       el.innerHTML = top.map(c => {
         const gb = gbOf(c);
         const name = c.name || c.ip || c.mac;

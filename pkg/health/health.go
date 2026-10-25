@@ -84,6 +84,7 @@ func Eval(ctx context.Context, client *vm.Client, live []types.CakeStats, hist *
 		evalStorage(diskSnap(sys)),
 		evalWANRejects(fwSnap(sys)),
 		evalConntrack(connSnap(sys)),
+		evalAccounting(ctx, client),
 	}
 	if op.Enabled() {
 		checks = append(checks, evalOrbi(op), evalWifiSignal(op))
