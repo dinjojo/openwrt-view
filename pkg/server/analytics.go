@@ -278,7 +278,7 @@ func probeEpisodes(se vm.Series, direction string, loc *time.Location) []Inciden
 // from continuously collected data (works between probe runs, including
 // at night when the probe sleeps).
 func (s *Server) passiveEpisodes(ctx context.Context, start, end int64) []Incident {
-	ping, err := s.vmc.QueryRange(ctx, `collectd_ping{ping="1.1.1.1"}`, start, end, "60s")
+	ping, err := s.vmc.QueryRange(ctx, `avg(collectd_ping)`, start, end, "60s")
 	if err != nil || len(ping) == 0 {
 		return nil
 	}

@@ -992,7 +992,7 @@ func (s *Server) handleAPIHistorySystem(c fiber.Ctx) error {
 	if err := fetchAvg(`collectd_conntrack{conntrack=""}`, &out.Conns); err != nil {
 		return c.Status(502).SendString(`{"error":"` + err.Error() + `"}`)
 	}
-	if err := fetchAvg(`collectd_ping`, &out.WANRTT); err != nil {
+	if err := fetchAvg(`collectd_ping{ping="8.8.8.8"}`, &out.WANRTT); err != nil {
 		return c.Status(502).SendString(`{"error":"` + err.Error() + `"}`)
 	}
 	// WAN link errors/drops per minute (hardware counters on the WAN device).
