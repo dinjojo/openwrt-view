@@ -1919,6 +1919,14 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     function handleData(payload) {
       const ifaces = Array.isArray(payload.interfaces) ? payload.interfaces : [];
       latestIfaces = ifaces; // overview hero reads the live snapshot
+      // Overview hero: update on every SSE tick (1s), not on the 10s
+      // pollOverview cadence — otherwise the big numbers lag the live
+      // shaper cards and the topology node reading the same snapshot.
+      if (ifaces.length) {
+        const dnEl = document.getElementById('ov-down'), upEl = document.getElementById('ov-up');
+        if (dnEl) dnEl.textContent = ovMbit(wanDown());
+        if (upEl) upEl.textContent = ovMbit(wanUp());
+      }
       // Keep the exit-paths strip's direct-line card in step with the SSE
       // snapshot; lastTunnel carries the rates from the last /api/tunnel poll.
       if (document.getElementById('tn-direct') && lastTunnel && lastTunnel.rates_ok) {
