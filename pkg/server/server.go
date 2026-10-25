@@ -1049,18 +1049,9 @@ func (s *Server) handleAPIHistorySystem(c fiber.Ctx) error {
 		}
 	}
 	const wanDev = `{device="pppoe-wan"}`
-	// True peak speed, not a 5-minute average: a 2-3 minute speedtest
-	// burst averaged over 5m windows reads ~70% of the real rate. 30 s
-	// rate windows over the 10 s collectd scrape track what the line
-	// actually carried at its fastest.
-	fetchScalar(`max(max_over_time((rate(node_network_receive_bytes_total`+wanDev+`[30s]))[24h:10s])) * 8 / 1e6`, &out.PeakDown)
-	fetchScalar(`max(max_over_time((rate(node_network_transmit_bytes_total`+wanDev+`[30s]))[24h:10s])) * 8 / 1e6`, &out.PeakUp)
-	fetchScalar(`quantile(0.95, quantile_over_time(0.95, (rate(node_network_receive_bytes_total`+wanDev+`[30s]))[24h:10s])) * 8 / 1e6`, &out.P95Down)
-	fetchScalar(`quantile(0.95, quantile_over_time(0.95, (rate(node_network_transmit_bytes_total`+wanDev+`[30s]))[24h:10s])) * 8 / 1e6`, &out.P95Up)
-	fetchScalar(`increase(node_network_receive_bytes_total`+wanDev+`[24h]) / 1e9`, &out.TotalDown)
-	fetchScalar(`increase(node_network_transmit_bytes_total`+wanDev+`[24h]) / 1e9`, &out.TotalUp)
 
-	// Provisioned capacity from the live CAKE shapers, Mbit/s.
+	// Provisioned capacity from the live CAKE shapers, Mbit/s — needed
+	// before the peak queries so rates can be sanity-clamped.
 	s.statsMu.RLock()
 	liveStats := s.stats
 	s.statsMu.RUnlock()
@@ -1071,6 +1062,50 @@ func (s *Server) handleAPIHistorySystem(c fiber.Ctx) error {
 		case "egress":
 			out.ShapedUp = health.ShapedBits(cs.Bandwidth) / 1e6
 		}
+	}
+
+	// True peak speed, not a 5-minute average: a 2-3 minute speedtest
+	// burst averaged over 5m windows reads ~70% of the real rate. 30 s
+	// rate windows over the 10 s collectd scrape track what the line
+	// actually carried at its fastest.
+	//
+	// A router or interface restart stitches a fresh counter onto the
+	// old series and rate() emits a few absurd spikes (observed after a
+	// reboot: 240 Gbit/s samples, ~300 GB of phantom traffic each, which
+	// also poisoned the traffic totals). The shaper bounds what the line
+	// can carry, so while it is known, drop rate samples above 1.05× of
+	// it: PromQL's `<` comparison filters those samples out inside the
+	// subquery (a clamp would still let the garbage set the peak).
+	// Totals integrate the filtered 30 s rates instead of increase() so
+	// the same garbage cannot leak back in; the ×10 s step matches the
+	// subquery.
+	for _, q := range []struct {
+		fn     string // max_over_time / quantile / sum_over_time wrapper
+		dir    string // receive | transmit
+		shaped float64
+		tail   string // closing + unit conversion
+		dest   *float64
+	}{
+		{"max_over_time", "receive", out.ShapedDown, " * 8 / 1e6", &out.PeakDown},
+		{"max_over_time", "transmit", out.ShapedUp, " * 8 / 1e6", &out.PeakUp},
+		{"sum_over_time", "receive", out.ShapedDown, " * 10 / 1e9", &out.TotalDown},
+		{"sum_over_time", "transmit", out.ShapedUp, " * 10 / 1e9", &out.TotalUp},
+		{"p95", "receive", out.ShapedDown, " * 8 / 1e6", &out.P95Down},
+		{"p95", "transmit", out.ShapedUp, " * 8 / 1e6", &out.P95Up},
+	} {
+		inner := "rate(node_network_" + q.dir + "_bytes_total" + wanDev + "[30s])"
+		sel := "(" + inner + ")"
+		if q.shaped > 0 {
+			// shaped is Mbit/s; the rate series is bytes/s. `< cap`
+			// keeps only physically possible samples.
+			sel += " < " + fmt.Sprintf("%0.0f", q.shaped*1e6*1.05/8)
+		}
+		body := "(" + sel + ")[24h:10s]"
+		expr := q.fn + "(" + body + ")" + q.tail
+		if q.fn == "p95" {
+			expr = "quantile(0.95, quantile_over_time(0.95, " + body + "))" + q.tail
+		}
+		fetchScalar(expr, q.dest)
 	}
 	if grid == nil {
 		grid = []int64{}
