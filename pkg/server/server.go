@@ -315,7 +315,9 @@ type vmRangeSpec struct {
 var vmRanges = map[string]vmRangeSpec{
 	"1h":  {step: "15s", rateLimit: "2m"},
 	"3h":  {step: "30s", rateLimit: "3m"},
+	"5h":  {step: "45s", rateLimit: "4m"},
 	"6h":  {step: "60s", rateLimit: "4m"},
+	"12h": {step: "90s", rateLimit: "6m"},
 	"24h": {step: "120s", rateLimit: "8m"},
 	"7d":  {step: "600s", rateLimit: "30m"},
 	"30d": {step: "1800s", rateLimit: "1h"},
@@ -903,7 +905,7 @@ func (s *Server) handleAPIHistoryWAN(c fiber.Ctx) error {
 	return c.Send(b)
 }
 
-// parseWindow reads either ?range=1h|3h|6h|24h|7d|30d or an explicit custom
+// parseWindow reads either ?range=1h|3h|5h|6h|12h|24h|7d|30d or an explicit custom
 // window ?from=<unix>&to=<unix> (to clamped to now+5min, span 2 min … 31 days)
 // and returns the query spec plus absolute start/end. An empty errc means OK.
 func parseWindow(c fiber.Ctx, def string) (spec vmRangeSpec, start, end int64, errc string) {
@@ -928,7 +930,7 @@ func parseWindow(c fiber.Ctx, def string) (spec vmRangeSpec, start, end int64, e
 	rng := c.Query("range", def)
 	spec, ok := vmRanges[rng]
 	if !ok {
-		return vmRangeSpec{}, 0, 0, "range must be one of 1h,3h,6h,24h,7d,30d"
+		return vmRangeSpec{}, 0, 0, "range must be one of 1h,3h,5h,6h,12h,24h,7d,30d"
 	}
 	end = time.Now().Unix()
 	return spec, rangeStart(rng, end), end, ""
@@ -1124,8 +1126,12 @@ func rangeStart(rng string, end int64) int64 {
 		return end - 3600
 	case "3h":
 		return end - 3*3600
+	case "5h":
+		return end - 5*3600
 	case "6h":
 		return end - 6*3600
+	case "12h":
+		return end - 12*3600
 	case "24h":
 		return end - 24*3600
 	case "7d":

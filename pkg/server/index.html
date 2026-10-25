@@ -747,6 +747,9 @@
           <button data-intrange="billing" class="intrange-btn on">Period</button>
           <button data-intrange="1h" class="intrange-btn">1H</button>
           <button data-intrange="3h" class="intrange-btn">3H</button>
+          <button data-intrange="5h" class="intrange-btn">5H</button>
+          <button data-intrange="12h" class="intrange-btn">12H</button>
+          <button data-intrange="24h" class="intrange-btn">24H</button>
           <button data-intrange="custom" class="intrange-btn">Custom</button>
         </span>
         <span id="ov-int-custom" class="hidden" style="display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center">
@@ -3799,7 +3802,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     // charts, usage donut, top clients and events. 'billing' shows the
     // billing month for usage and a 7-day chart; the others query Victoria
     // Metrics for the exact span.
-    let intRange = '3h';     // 'billing' | '1h' | '3h' | 'custom' (default 3h)
+    let intRange = '3h';     // 'billing' | '1h' | '3h' | '5h' | '12h' | '24h' | 'custom' (default 3h)
+    // Hour-long windows that slice the shared 24h system payload by time.
+    const RANGE_SECS = { '1h': 3600, '3h': 3 * 3600, '5h': 5 * 3600, '12h': 12 * 3600, '24h': 24 * 3600 };
     let intCustom = null;    // { from, to } unix seconds, custom window only
     const intCache = {};     // window key -> { d, at }  (chart payloads)
     const winCache = {};     // window key -> { clients, at } (per-client GB)
@@ -3813,6 +3818,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (intRange === 'billing') return 'This billing period';
       if (intRange === '1h') return 'Last hour';
       if (intRange === '3h') return 'Last 3 hours';
+      if (intRange === '5h') return 'Last 5 hours';
+      if (intRange === '12h') return 'Last 12 hours';
+      if (intRange === '24h') return 'Last 24 hours';
       if (intCustom) {
         const f = new Date(intCustom.from * 1000), t2 = new Date(intCustom.to * 1000);
         return f.toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) +
@@ -4066,7 +4074,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         return;
       }
       lhCustom = null;
-      lhRange = { billing: '7d', '1h': '1h', '3h': '3h' }[intRange] || '24h';
+      lhRange = { billing: '7d', '1h': '1h', '3h': '3h', '5h': '6h', '12h': '24h', '24h': '24h' }[intRange] || '24h';
       _setPillBtns('.lhrange-btn', 'lhrange', lhRange);
       loadLineHealth();
     }
@@ -4098,8 +4106,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
 
     // ── Overview: gateway gauges, card renderers ──────────────────────────
     /** Internet card chart for the selected window. billing shows a 7-day
-     *  view, 3h slices the shared 24h payload, 1h and custom windows fetch
-     *  their own (finer) series. */
+     *  view, the hour windows (3h/5h/12h/24h) slice the shared 24h payload
+     *  by timestamp, 1h and custom windows fetch their own (finer) series. */
     async function loadIntChart() {
       try {
         if (intRange === 'custom' && !intCustom) return;
@@ -4109,12 +4117,19 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         const cached = intCache[key];
         if (cached && Date.now() - cached.at < ttl) {
           d = cached.d;
-        } else if (intRange === '3h') {
+        } else if (RANGE_SECS[intRange] && intRange !== '1h') {
           if (!ovWanData || !ovWanData.t || ovWanData.t.length < 2) {
             ovWanData = await fetch(appURL('/api/history/system?range=24h')).then(r => r.json());
             ovWanAt = Date.now();
           }
-          d = ovWanData;
+          // Slice by timestamp, not a fixed sample count — the shared
+          // payload's effective step varies with scraping gaps.
+          const cutoff = Date.now() / 1000 - RANGE_SECS[intRange];
+          const pick = arr => {
+            const pairs = (arr || []).map((v, j) => [ovWanData.t[j], v]).filter(p => p[0] >= cutoff);
+            return pairs.map(p => p[1]);
+          };
+          d = { t: pick(ovWanData.t), wanrx: pick(ovWanData.wanrx), wantx: pick(ovWanData.wantx) };
         } else if (intRange === 'billing') {
           d = await fetch(appURL('/api/history/system?range=7d')).then(r => r.json());
         } else if (intRange === '1h') {
@@ -4128,12 +4143,31 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       } catch (e) { console.error('[int-chart]', e); }
     }
 
+    /** Shaper capacity for a direction from the live SSE qdisc snapshot,
+     *  Mbit/s (ingress ifb4eth0 paces download, egress eth0 upload). */
+    function ifaceShapedMbit(dir) {
+      const want = dir === 'down' ? 'ifb4eth0' : 'eth0';
+      const i = (latestIfaces || []).find(x => x.interface === want);
+      const m = i && /^([\d.]+)([KkMmGg])/.exec(i.bandwidth || '');
+      return m ? parseFloat(m[1]) * { k: 1e-3, m: 1, g: 1e3 }[m[2].toLowerCase()] : 0;
+    }
+
     function renderIntChart(d) {
       const cd = document.getElementById('ov-int-chart');
       const sub = document.getElementById('ov-int-sub');
       if (!cd || !d || !d.t || d.t.length < 2 || !isUPlotReady() || cd.offsetParent === null) return;
+      // A router restart can leave a few impossible rate samples in the
+      // counter history (observed: 240 Gbit/s). The shaper bounds the
+      // real line, so blank anything above 1.05× of it — the chart keeps
+      // its gap and the stats ignore nulls.
+      const capD = ifaceShapedMbit('down') * 1.05, capU = ifaceShapedMbit('up') * 1.05;
+      const sane = (arr, cap) => cap > 0 ? (arr || []).map(v => (v != null && v > cap) ? null : v) : (arr || []);
+      d.wanrx = sane(d.wanrx, capD);
+      d.wantx = sane(d.wantx, capU);
       // Rebuild only when the payload behind the window changed.
-      const n = intRange === '3h' ? Math.min(36, d.t.length) : d.t.length;
+      // Hour windows arrive pre-sliced to the selected span by
+      // loadIntChart; every other payload is drawn whole.
+      const n = d.t.length;
       const stamp = (d === ovWanData ? 'wan' + ovWanAt : 'p' + n + '-' + d.t[d.t.length - 1]);
       if (stamp === ovIntAt) return;
       ovIntAt = stamp;
@@ -4525,8 +4559,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       const el = document.getElementById('ov-events');
       // A selected window narrows the feed to what happened inside it.
       if (winActive()) {
-        const from = intRange === '1h' ? Date.now() / 1000 - 3600
-          : intRange === '3h' ? Date.now() / 1000 - 3 * 3600
+        const from = RANGE_SECS[intRange] ? Date.now() / 1000 - RANGE_SECS[intRange]
           : intCustom ? intCustom.from : 0;
         const to = intRange === 'custom' && intCustom ? intCustom.to : Infinity;
         list = list.filter(ev => ev.at >= from && ev.at <= to);
