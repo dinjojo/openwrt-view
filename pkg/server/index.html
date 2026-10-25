@@ -314,6 +314,12 @@
     .ov-ap-dot.off { background: var(--lamp-off); }
     .ov-ap-row .cnt { margin-left: auto; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 
+    /* Busiest-right-now rows (Network card) */
+    .ov-busy-row { display: flex; align-items: center; gap: 10px; padding: 5px 6px; border-radius: 6px; font-size: var(--t-sm); }
+    .ov-busy-row:hover { background: var(--well); }
+    .ov-busy-row .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ov-busy-row .rates { margin-left: auto; color: var(--ink-2); font-variant-numeric: tabular-nums; flex: none; }
+
     /* Usage donut */
     .ov-usage { display: flex; align-items: center; gap: var(--s4); }
     .ov-donut-wrap { position: relative; flex: none; }
@@ -786,6 +792,7 @@
             <div><b>NanoPi R6C</b><span class="xs muted block">Router · OpenWrt · CAKE</span></div>
           </div>
           <div id="ov-gauges" class="ov-gauges"></div>
+          <div id="ov-dns" class="sm muted ov-foot" style="display:none" title="AdGuard Home DNS filtering on this router"></div>
           <button id="ov-gateway" class="link" title="Open the System tab for full charts">System
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
         </section>
@@ -801,6 +808,10 @@
               <b class="num" id="ov-aps">–</b><span>access points<span id="ov-aps-sub" class="xs muted block">RBR50 + RBS50</span></span></div>
           </div>
           <div id="ov-aps-rows" class="ov-ap-rows"></div>
+          <div id="ov-busy" class="ov-busy" style="display:none">
+            <div class="m-lab" style="margin-bottom:4px">Busiest right now <span class="sub">live per-device rates</span></div>
+            <div id="ov-busy-rows"></div>
+          </div>
           <button id="ov-wifi-open" class="link" title="Open the Clients tab">All clients
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
         </section>
@@ -1048,6 +1059,21 @@
         </div>
         <div id="wan-strip" class="meters hidden" style="margin-bottom:var(--s5)"></div>
         <div id="sys-charts" class="charts"></div>
+      </section>
+      <!-- DNS filtering (AdGuard Home): hidden until /api/dns reports an AGH -->
+      <section id="sys-dns" class="sect hidden">
+        <div class="sect-head"><h2 class="h2">DNS filtering <span class="sub" id="dns-sub">AdGuard Home</span></h2></div>
+        <div id="dns-strip" class="meters"></div>
+        <div id="dns-lists" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:var(--s4);margin-top:var(--s4)">
+          <div>
+            <div class="m-lab" style="margin-bottom:6px">Top blocked domains <span class="sub">stats window</span></div>
+            <div id="dns-top-blocked" class="rows"></div>
+          </div>
+          <div>
+            <div class="m-lab" style="margin-bottom:6px">Busiest DNS clients <span class="sub">stats window</span></div>
+            <div id="dns-top-clients" class="rows"></div>
+          </div>
+        </div>
       </section>
       <!-- Daily report: hidden until /api/report answers with data -->
       <section id="sys-report" class="sect hidden">
@@ -2132,7 +2158,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       } else if (name === 'system') {
         loadSystemHistory();
         loadReport();
-        tabTimers.system = [setInterval(loadSystemHistory, 60000), setInterval(loadReport, 600000)];
+        loadDNS(); // DNS filtering section has data on first paint
+        tabTimers.system = [setInterval(loadSystemHistory, 60000), setInterval(loadReport, 600000), setInterval(loadDNS, 60000)];
       }
     }
 
@@ -3038,6 +3065,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     }
 
     async function loadOvIncidents() {
+    loadDNS(); // AGH strip on the Gateway card + System tab section
       try {
         const d = await fetch(appURL('/api/incidents?range=24h')).then(r => r.json());
         ovInc = d && typeof d.count === 'number' ? d : null;
@@ -3061,6 +3089,100 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           el.innerHTML = '';
         }
       } catch (_) {}
+    }
+
+    // ── DNS (AdGuard Home) ───────────────────────────────────────────────
+    // One /api/dns poll feeds two surfaces: a one-line strip in the
+    // Gateway card (overview) and a full section on the System tab. When
+    // AGH is unconfigured or unreachable both surfaces hide — no error
+    // states, DNS filtering keeps working either way.
+
+    let dnsState = null;
+
+    async function loadDNS() {
+      try {
+        const d = await fetch(appURL('/api/dns')).then(r => r.json());
+        dnsState = d || null;
+      } catch (_) { dnsState = null; }
+      renderDNS();
+    }
+
+    function dnsWindow() {
+      if (!dnsState || !dnsState.interval_hours) return 'stats window';
+      const hh = dnsState.interval_hours;
+      return hh >= 24 ? 'last ' + Math.round(hh / 24) + 'd' : 'last ' + Math.round(hh) + 'h';
+    }
+
+    // Friendly device name for an AGH client IP (/api/clients snapshot).
+    function clientNameByIP(ip) {
+      const c = (clientsCache || []).find(c => c.ip === ip);
+      if (c && c.name && c.name !== c.mac && c.name !== 'untracked') return c.name;
+      return ip;
+    }
+
+    function renderDNS() {
+      const strip = document.getElementById('ov-dns');
+      if (!strip) return;
+      const on = dnsState && dnsState.available;
+      strip.style.display = on ? '' : 'none';
+      if (on) {
+        strip.innerHTML = lamp(dnsState.protection ? 'ok' : 'warn', 'sm') + ' DNS ' +
+          '<span class="strong ink">' + Number(dnsState.queries).toLocaleString() + ' queries</span>' +
+          ' <span class="muted">&middot; ' + dnsState.blocked_pct.toFixed(1) + '% blocked &middot; ' + dnsWindow() + ' &middot; AdGuard Home</span>';
+      }
+      renderDNSSection();
+    }
+
+    function renderDNSSection() {
+      const sect = document.getElementById('sys-dns');
+      if (!sect) return;
+      const on = dnsState && dnsState.available;
+      sect.classList.toggle('hidden', !on);
+      if (!on) return;
+      document.getElementById('dns-sub').textContent =
+        'AdGuard Home' + (dnsState.version ? ' v' + dnsState.version : '') + ' · ' + dnsWindow();
+
+      const cell = (lab, val, sub) => '<div class="meter"><div class="m-lab">' + lab + '</div>' +
+        '<div class="m-val sm">' + val + '</div>' +
+        (sub ? '<div class="m-sub">' + sub + '</div>' : '<div class="m-sub">&nbsp;</div>') + '</div>';
+      document.getElementById('dns-strip').innerHTML =
+        cell('Protection', lamp(dnsState.protection ? 'ok' : 'warn') + ' ' + (dnsState.protection ? 'on' : 'OFF'),
+          'filtering master switch') +
+        cell('Queries', Number(dnsState.queries).toLocaleString(), dnsWindow()) +
+        cell('Blocked', Number(dnsState.blocked).toLocaleString(), dnsState.blocked_pct.toFixed(1) + '% of queries') +
+        cell('Worst domain', dnsState.top_blocked && dnsState.top_blocked.length
+          ? h(dnsState.top_blocked[0].name)
+          : '\u2013',
+          dnsState.top_blocked && dnsState.top_blocked.length
+            ? Number(dnsState.top_blocked[0].count).toLocaleString() + ' hits'
+            : 'nothing blocked');
+
+      const mkRow = (name, count) => '<div class="ev" style="grid-template-columns:minmax(0,1fr) 5rem">' +
+        '<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + h(name) + '</span>' +
+        '<span class="num muted">' + Number(count).toLocaleString() + '</span></div>';
+      document.getElementById('dns-top-blocked').innerHTML =
+        (dnsState.top_blocked || []).map(t => mkRow(t.name, t.count)).join('')
+        || '<p class="lrow sm muted">nothing blocked yet</p>';
+      document.getElementById('dns-top-clients').innerHTML =
+        (dnsState.top_clients || []).map(t => mkRow(clientNameByIP(t.name), t.count)).join('')
+        || '<p class="lrow sm muted">no client queries recorded</p>';
+    }
+
+    // Busiest-right-now (Network card): bandix-style live device ranking —
+    // top 3 online clients by current total rate, from /api/clients (a
+    // snapshot pollOverview already fetches — no extra request).
+    function renderBusiest(cl) {
+      const block = document.getElementById('ov-busy');
+      if (!block) return;
+      const rows = (cl || []).filter(c => c.online && (c.rx_rate > 0 || c.tx_rate > 0))
+        .map(c => ({ name: c.name || c.ip || c.mac, rx: c.rx_rate || 0, tx: c.tx_rate || 0 }))
+        .sort((a, b) => (b.rx + b.tx) - (a.rx + a.tx))
+        .slice(0, 3);
+      block.style.display = rows.length ? '' : 'none';
+      if (!rows.length) return;
+      document.getElementById('ov-busy-rows').innerHTML = rows.map(r =>
+        '<div class="ov-busy-row"><span class="n">' + h(r.name) + '</span>' +
+        '<span class="rates">' + fmtBits(r.rx) + ' \u2193 / ' + fmtBits(r.tx) + ' \u2191</span></div>').join('');
     }
 
     // Direct-line (native WAN) helpers for the exit-paths strip. WAN rates come
@@ -4643,6 +4765,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         }
         renderUsageDonut();
         renderTopClients(ovClients);
+        renderBusiest(ovClients);
         renderEvents(ovEvents);
         if (Array.isArray(evs)) { lampEvents = evs; lampEventsAt = Date.now(); renderLamps(); }
         renderTopology(); // Clients node uses the live online count

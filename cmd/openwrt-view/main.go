@@ -12,6 +12,7 @@ import (
 	"time"
 	_ "time/tzdata" // IANA zones for -tz on routers without /usr/share/zoneinfo
 
+	"github.com/dinjojo/openwrt-view/pkg/agh"
 	"github.com/dinjojo/openwrt-view/pkg/alerts"
 	"github.com/dinjojo/openwrt-view/pkg/log"
 	"github.com/dinjojo/openwrt-view/pkg/orbi"
@@ -51,6 +52,10 @@ func main() {
 	// credentials reach the process without appearing in ps or /proc cmdline.
 	tapoConf := flag.String("tapo-conf", os.Getenv("TAPO_CONF"), "KEY=VALUE file with TAPO_HOST, TAPO_USER, TAPO_PASS; values already set via flags or environment win")
 	radioIface := flag.String("radio-iface", os.Getenv("RADIO_IFACE"), "local monitor-mode Wi-Fi interface for channel utilisation and neighbour scans, e.g. wlan1 (empty disables)")
+	aghURL := flag.String("agh-url", os.Getenv("AGH_URL"), "AdGuard Home base URL, e.g. http://127.0.0.1:8888 (empty disables DNS monitoring)")
+	aghUser := flag.String("agh-user", os.Getenv("AGH_USER"), "AdGuard Home dashboard user (a dedicated user, not the admin login)")
+	aghPass := flag.String("agh-pass", os.Getenv("AGH_PASS"), "AdGuard Home dashboard password")
+	aghConf := flag.String("agh-conf", os.Getenv("AGH_CONF"), "KEY=VALUE file with AGH_URL, AGH_USER, AGH_PASS; values already set via flags or environment win")
 	// The ntfy token is never logged; keep it in a root-only env file.
 	alertURL := flag.String("alert-ntfy-url", os.Getenv("ALERT_NTFY_URL"), "ntfy topic URL for push alerts on warn/crit events, e.g. https://ntfy.sh/mytopic (empty disables)")
 	alertToken := flag.String("alert-ntfy-token", os.Getenv("ALERT_NTFY_TOKEN"), "ntfy access token (sent as Authorization: Bearer)")
@@ -118,6 +123,29 @@ func main() {
 		}
 	}
 
+	// AdGuard Home settings from a root-only conf file, same precedence
+	// as Orbi's and Tapo's.
+	if *aghConf != "" {
+		if conf, err := readKVFile(*aghConf); err != nil {
+			log.Logger.Warn().Err(err).Str("file", *aghConf).Msg("cannot read -agh-conf; continuing without it")
+		} else {
+			explicit := map[string]bool{}
+			flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+			for _, e := range []struct {
+				key, flag string
+				val       *string
+			}{
+				{"AGH_URL", "agh-url", aghURL},
+				{"AGH_USER", "agh-user", aghUser},
+				{"AGH_PASS", "agh-pass", aghPass},
+			} {
+				if v, ok := conf[e.key]; ok && !explicit[e.flag] && *e.val == os.Getenv(e.key) {
+					*e.val = v
+				}
+			}
+		}
+	}
+
 	if *showVer {
 		fmt.Printf("openwrt-view %s\n", Version)
 		os.Exit(0)
@@ -166,6 +194,10 @@ func main() {
 	if *tapoHost != "" {
 		srv.SetTapoPoller(tapo.New(tapo.Config{Host: *tapoHost, User: *tapoUser, Pass: *tapoPass}, nil))
 		log.Logger.Info().Str("host", *tapoHost).Msg("Tapo plug monitoring enabled")
+	}
+	if *aghURL != "" {
+		srv.SetAGH(agh.New(agh.Config{URL: *aghURL, User: *aghUser, Pass: *aghPass}))
+		log.Logger.Info().Str("url", *aghURL).Msg("AdGuard Home monitoring enabled")
 	}
 	notifier, err := alerts.New(*alertURL, *alertToken)
 	if err != nil {

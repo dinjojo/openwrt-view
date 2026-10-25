@@ -23,7 +23,7 @@ import (
 
 	"github.com/dinjojo/openwrt-view/pkg/sysmon"
 	"github.com/dinjojo/openwrt-view/pkg/tapo"
-
+	"github.com/dinjojo/openwrt-view/pkg/agh"
 	"github.com/dinjojo/openwrt-view/pkg/alerts"
 	"github.com/dinjojo/openwrt-view/pkg/clients"
 	"github.com/dinjojo/openwrt-view/pkg/ebpfacct"
@@ -69,6 +69,7 @@ type Server struct {
 	sys          *sysmon.Pollers
 	orbi         *orbi.Poller
 	tapo         *tapo.Poller     // smart-plug poller; nil when unconfigured
+	agh          *agh.Poller      // AdGuard Home poller; nil when unconfigured
 	shell        *orbissn.Poller  // Orbi shell (SSH/telnet) poller; nil or disabled when unconfigured
 	radio        *radio.Collector // local monitor-mode dongle; nil or disabled when unconfigured
 	alerts       *alerts.Notifier // ntfy push; nil when unconfigured
@@ -127,6 +128,7 @@ func New(addr string, interval time.Duration, histCap int, vmURL, version string
 	app.Get("/api/tunnel", s.handleAPITunnel)
 	app.Get("/api/orbi", s.handleAPIOrbi)
 	app.Get("/api/tapo", s.handleAPITapo)
+	app.Get("/api/dns", s.handleAPIDNS)
 	app.Get("/api/radio", s.handleAPIRadio)
 	app.Get("/api/config", s.handleAPIConfig)
 	app.Get("/api/report", s.handleAPIReport)
@@ -158,6 +160,10 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	if s.tapo != nil {
 		s.tapo.SetVMClient(s.vmc)
 		go s.tapo.Run(ctx)
+	}
+	if s.agh != nil {
+		s.agh.SetEventHook(s.events.Add)
+		go s.agh.Run(ctx)
 	}
 	if s.shell.Enabled() {
 		s.shell.SetEventHook(s.events.Add)
@@ -1232,6 +1238,23 @@ func (s *Server) handleAPITapo(c fiber.Ctx) error {
 	}
 	c.Set("Content-Type", "application/json; charset=utf-8")
 	b, _ := json.Marshal(s.tapo.Snapshot())
+	return c.Send(b)
+}
+
+// SetAGH registers the AdGuard Home poller. Call before Run; Run starts
+// it and wires its events into the feed.
+func (s *Server) SetAGH(p *agh.Poller) { s.agh = p }
+
+// handleAPIDNS reports the AdGuard Home snapshot. When no AGH is
+// configured the answer is still 200 with available=false — the UI
+// treats that exactly like an unreachable AGH and hides DNS.
+func (s *Server) handleAPIDNS(c fiber.Ctx) error {
+	c.Set("Content-Type", "application/json; charset=utf-8")
+	if s.agh == nil {
+		b, _ := json.Marshal(agh.State{Available: false})
+		return c.Send(b)
+	}
+	b, _ := json.Marshal(s.agh.Snapshot())
 	return c.Send(b)
 }
 

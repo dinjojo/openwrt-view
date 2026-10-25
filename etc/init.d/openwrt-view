@@ -46,6 +46,7 @@ start_service() {
 		CONF=""
 		[ -r /opt/monitoring/orbi.conf ] && CONF="-orbi-conf /opt/monitoring/orbi.conf"
 		[ -r /opt/monitoring/tapo.conf ] && CONF="$CONF -tapo-conf /opt/monitoring/tapo.conf"
+		[ -r /opt/monitoring/agh.conf ] && CONF="$CONF -agh-conf /opt/monitoring/agh.conf"
 		exec "$1" -host "$2" -port "$3" -interval "$4" $CONF
 	' sh "$PROG" "$HOST" "$PORT" "$INTERVAL"
 	procd_set_param env OPENWRT_VIEW_TZ="$tz"
