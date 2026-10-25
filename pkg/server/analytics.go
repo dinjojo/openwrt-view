@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/dinjojo/openwrt-view/pkg/health"
+	"github.com/dinjojo/openwrt-view/pkg/sysmon"
 	"github.com/dinjojo/openwrt-view/pkg/vm"
 	fiber "github.com/gofiber/fiber/v3"
 )
@@ -404,16 +405,17 @@ func parseBandwidth(s string) float64 {
 
 // TunnelReport is the response of /api/tunnel.
 type TunnelReport struct {
-	Available     bool    `json:"available"`
-	Endpoint      string  `json:"endpoint"`
-	HandshakeAge  float64 `json:"handshake_age_s"` // seconds since last handshake; -1 = never
-	RxBytes       uint64  `json:"rx_bytes"`
-	TxBytes       uint64  `json:"tx_bytes"`
-	RxPerS        float64 `json:"rx_per_s"`
-	TxPerS        float64 `json:"tx_per_s"`
-	RatesOK       bool    `json:"rates_ok"`
-	Reconnects24h int     `json:"reconnects_24h"`
-	Reconnects7d  int     `json:"reconnects_7d"`
+	Available     bool                    `json:"available"`
+	Endpoint      string                  `json:"endpoint"`
+	HandshakeAge  float64                 `json:"handshake_age_s"` // seconds since last handshake; -1 = never
+	RxBytes       uint64                  `json:"rx_bytes"`
+	TxBytes       uint64                  `json:"tx_bytes"`
+	RxPerS        float64                 `json:"rx_per_s"`
+	TxPerS        float64                 `json:"tx_per_s"`
+	RatesOK       bool                    `json:"rates_ok"`
+	Reconnects24h int                     `json:"reconnects_24h"`
+	Reconnects7d  int                     `json:"reconnects_7d"`
+	Policies      []sysmon.PbrPolicyState `json:"policies,omitempty"` // pbr policy-routing rules and counters
 }
 
 func (s *Server) handleAPITunnel(c fiber.Ctx) error {
@@ -435,6 +437,9 @@ func (s *Server) handleAPITunnel(c fiber.Ctx) error {
 		now := time.Now().Unix()
 		rep.Reconnects24h = s.events.CountSince("warp", now-24*3600)
 		rep.Reconnects7d = s.events.CountSince("warp", now-7*24*3600)
+	}
+	if s.sys != nil && s.sys.Pbr != nil {
+		rep.Policies = s.sys.Pbr.Snapshot()
 	}
 	c.Set("Content-Type", "application/json; charset=utf-8")
 	b, _ := json.Marshal(rep)

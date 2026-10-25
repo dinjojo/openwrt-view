@@ -1080,6 +1080,10 @@
           <div class="meter"><div class="m-lab">Connection table</div>
             <div id="tn-conntrack" class="m-val sm">–</div><div id="tn-conntrack-sub" class="m-sub">&nbsp;</div></div>
         </div>
+        <div id="pbr-block" class="hidden" style="margin-top:var(--s4)">
+          <div class="m-lab" style="margin-bottom:6px">Policy routing <span class="sub">pbr rules &middot; live counters from nftables</span></div>
+          <div id="pbr-rows" class="rows"></div>
+        </div>
       </section>
 
       <section class="sect">
@@ -3119,6 +3123,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           document.getElementById('tn-reconnects-sub').textContent = '\u00A0';
           fillDirectCard(wanDown(), wanUp(), 'everything is on the direct line right now');
         }
+        renderPbr(t.policies);
       } catch (_) {}
       try {
         const hc = await fetch(appURL('/api/health')).then(r => r.json());
@@ -3130,6 +3135,31 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           document.getElementById('tn-conntrack-sub').textContent = ct.detail;
         }
       } catch (_) {}
+    }
+
+    // Policy routing table (pbr): one row per policy — name, what it matches
+    // and where it exits, live matched-traffic rate and lifetime bytes.
+    // Disabled policies show greyed (lamp 'unknown'); policies absent from
+    // /etc/config/pbr but present in nft still render. Hidden entirely when
+    // pbr reports nothing (package not installed / no policies).
+    function renderPbr(pol) {
+      const block = document.getElementById('pbr-block');
+      if (!block) return;
+      if (!pol || !pol.length) { block.classList.add('hidden'); return; }
+      block.classList.remove('hidden');
+      document.getElementById('pbr-rows').innerHTML = pol.map(p => {
+        const rate = p.active
+          ? (p.rates_ok ? fmtBits(p.bytes_per_s) : '\u2013')
+          : '\u2013';
+        const exit = p.exit === 'ignore' ? 'no exit (skipped)' : 'via ' + p.exit;
+        return '<div class="ev" style="grid-template-columns:14px minmax(0,1fr) 6.5rem 6rem">' +
+          '<span class="mk">' + lamp(p.active ? 'ok' : 'unknown', 'sm') + '</span>' +
+          '<span><span class="strong">' + h(p.name) + '</span>' +
+          ' <span class="muted">' + h(p.match) + ' \u2192 ' + h(exit) +
+          (p.enabled ? '' : ' \u00B7 disabled') + '</span></span>' +
+          '<span class="num strong' + (p.active ? ' acc' : '') + '">' + rate + '</span>' +
+          '<span class="num muted">' + (p.active ? ovBytes(p.bytes) : '\u2013') + '</span></div>';
+      }).join('');
     }
 
     // ── Trends tab ──────────────────────────────────────────────────────

@@ -605,6 +605,7 @@ type Pollers struct {
 	Disk  *DiskPoller
 	FW    *FWPoller
 	Conn  *ConnPoller
+	Pbr   *PbrPoller
 }
 
 // NewAll starts every sysmon poller.
@@ -615,5 +616,6 @@ func NewAll(ctx context.Context) *Pollers {
 		Disk:  NewDisk(ctx, "/dev/nvme0"),
 		FW:    NewFW(ctx),
 		Conn:  NewConntrack(ctx),
+		Pbr:   NewPbr(ctx),
 	}
 }
