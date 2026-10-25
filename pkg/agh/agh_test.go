@@ -10,7 +10,8 @@ import (
 )
 
 // fakeAGH mimics the AdGuard Home API surface the poller uses: cookie
-// login, status, stats (modern array top lists) and stats info.
+// login, status, stats (0.107.79 single-key-object top lists), stats
+// config and the legacy stats info endpoint.
 type fakeAGH struct {
 	srv         *httptest.Server
 	authed      atomic.Bool
@@ -27,12 +28,12 @@ func newFakeAGH(t *testing.T, statsBody string) *fakeAGH {
 	f.statusBody.Store(`{"version":"0.107.57","protection_enabled":true}`)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/control/login", func(w http.ResponseWriter, r *http.Request) {
-		var creds struct{ Username, Password string }
+		var creds struct{ Name, Password string }
 		if f.rejectLogin.Load() {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-		if err := json.NewDecoder(r.Body).Decode(&creds); err != nil || creds.Username != "dash" || creds.Password != "pw" {
+		if err := json.NewDecoder(r.Body).Decode(&creds); err != nil || creds.Name != "dash" || creds.Password != "pw" {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
@@ -50,6 +51,13 @@ func newFakeAGH(t *testing.T, statsBody string) *fakeAGH {
 		}
 		w.Write([]byte(f.statsBody))
 	})
+	mux.HandleFunc("/control/stats/config", func(w http.ResponseWriter, r *http.Request) {
+		if !f.authed.Load() || f.failAuth.Load() {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Write([]byte(`{"ignored":[],"interval":86400000,"enabled":true}`))
+	})
 	mux.HandleFunc("/control/stats/info", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(f.infoBody))
 	})
@@ -59,13 +67,14 @@ func newFakeAGH(t *testing.T, statsBody string) *fakeAGH {
 }
 
 const modernStats = `{
+  "time_units": "hours",
   "num_dns_queries": 48213,
   "num_blocked_filtering": 8671,
   "num_replaced_safebrowsing": 3,
   "num_replaced_parental": 0,
-  "top_queried_domains": [["example.com", 900], ["ads.example.net", 400]],
-  "top_blocked_domains": [["doubleclick.net", 300], ["tracker.io", 150], ["ads.example.net", 40]],
-  "top_clients": [["192.168.1.104", 12000], ["192.168.1.5", 8000]]
+  "top_queried_domains": [{"example.com": 900}, {"ads.example.net": 400}],
+  "top_blocked_domains": [{"doubleclick.net": 300}, {"tracker.io": 150}, {"ads.example.net": 40}],
+  "top_clients": [{"192.168.1.104": 12000}, {"192.168.1.5": 8000}]
 }`
 
 func TestPollerSnapshot(t *testing.T) {
@@ -166,6 +175,23 @@ func TestLegacyMapTopLists(t *testing.T) {
 	got := legacy.canonical(2)
 	if len(got) != 2 || got[0].Name != "ads.example.net" || got[0].Count != 10 {
 		t.Errorf("legacy map decode/sort wrong: %+v", got)
+	}
+}
+
+func TestPairTopLists(t *testing.T) {
+	pairs := rawNameList([]byte(`[["doubleclick.net", 5], ["ads.example.net", 10]]`))
+	got := pairs.canonical(2)
+	if len(got) != 2 || got[0].Name != "ads.example.net" || got[0].Count != 10 {
+		t.Errorf("pair decode/sort wrong: %+v", got)
+	}
+}
+
+func TestObjectListTopLists(t *testing.T) {
+	// AGH 0.107.79 encodes each entry as a single-key object.
+	objs := rawNameList([]byte(`[{"doubleclick.net": 5}, {"ads.example.net": 10}]`))
+	got := objs.canonical(2)
+	if len(got) != 2 || got[0].Name != "ads.example.net" || got[0].Count != 10 {
+		t.Errorf("object-list decode/sort wrong: %+v", got)
 	}
 }
 

@@ -102,9 +102,10 @@ func (p *Poller) Run(ctx context.Context) {
 }
 
 // login authenticates and stores the session cookie in the jar. AGH's
-// login accepts {"username","password"} and answers 200 with a cookie.
+// login authenticates and stores the session cookie in the jar. AGH's
+// login accepts {"name","password"} and answers 200 with a cookie.
 func (p *Poller) login() error {
-	body, _ := json.Marshal(map[string]string{"username": p.cfg.User, "password": p.cfg.Pass})
+	body, _ := json.Marshal(map[string]string{"name": p.cfg.User, "password": p.cfg.Pass})
 	resp, err := p.hc.Post(p.cfg.URL+"/control/login", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -164,7 +165,7 @@ func (p *Poller) record(st State) {
 }
 
 // fetch gathers one snapshot: /control/status for protection and
-// version, /control/stats for counts and top lists, /control/stats/info
+// version, /control/stats for counts and top lists, /control/stats/config
 // for the window length.
 func (p *Poller) fetch() (State, error) {
 	st := State{}
@@ -205,10 +206,19 @@ func (p *Poller) fetch() (State, error) {
 	return st, nil
 }
 
-// statsIntervalHours reads /control/stats/info and normalises AGH's
-// version-dependent units: ≤90 means days (old API), larger values are
-// seconds or nanoseconds — both unambiguous against the 90-day ceiling.
+// statsIntervalHours reads the statistics-retention window and normalises
+// AGH's version-dependent encodings. AGH ≥0.107.45 exposes it as
+// /control/stats/config with interval in milliseconds (24 h default =
+// 86,400,000); older builds serve /control/stats/info where ≤90 means
+// days (old API), larger values are seconds or nanoseconds — both
+// unambiguous against the 90-day ceiling.
 func (p *Poller) statsIntervalHours() (float64, error) {
+	var cfg struct {
+		Interval float64 `json:"interval"`
+	}
+	if err := p.getJSON("/control/stats/config", &cfg); err == nil && cfg.Interval > 0 {
+		return cfg.Interval / 3.6e6, nil // ms → hours
+	}
 	var info struct {
 		Interval json.Number `json:"interval"`
 	}
@@ -265,6 +275,18 @@ func (r rawNameList) canonical(limit int) []NameCount {
 				continue
 			}
 			out = append(out, NameCount{Name: name, Count: toInt64(pr[1])})
+		}
+		sortByCount(out)
+		return capList(out, limit)
+	}
+	var objs []map[string]int64
+	if err := json.Unmarshal(r, &objs); err == nil {
+		// AGH ≥0.107.45: [{"name":count},{name2:count2},…]
+		out := make([]NameCount, 0, len(objs))
+		for _, o := range objs {
+			for name, count := range o {
+				out = append(out, NameCount{Name: name, Count: count})
+			}
 		}
 		sortByCount(out)
 		return capList(out, limit)

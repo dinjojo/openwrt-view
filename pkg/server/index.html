@@ -4660,7 +4660,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (!el) return;
       // Rank by the selected window's usage when known, else by lifetime totals.
       const totals = usageTotals();
-      const online = list.filter(c => c.online);
+      const online = (list || []).filter(c => c.online);
       const gbOf = c => totals ? (totals[(c.mac || '').toUpperCase()] || 0) : (c.rx_total + c.tx_total) / 1024 ** 3;
       const top = online.slice().sort((a, b) => gbOf(b) - gbOf(a)).slice(0, 5);
       // A rotated randomized MAC makes one logical device appear twice
