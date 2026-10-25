@@ -159,6 +159,7 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	go s.radio.Run(ctx) // returns at once when no dongle is configured
 	go s.recordUsage(ctx)
 	go s.watchEvents(ctx)
+	go s.watchAccounting(ctx)
 	go s.runPoller(ctx)
 	go s.clientStore.Run(ctx, s.vmc) // per-client accounting poller
 	go func() {

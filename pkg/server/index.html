@@ -216,37 +216,50 @@
     .ov-cap-state[data-state="warn"]::before { background: var(--lamp-warn); }
     .ov-cap-state[data-state="crit"]::before { background: var(--lamp-crit); }
 
-    /* Hero: centered verdict + topology chain */
-    .ov-hero { padding-block: var(--s6) var(--s5); }
-    .ov-verdict-c { text-align: center; display: flex; flex-direction: column; align-items: center;
-      gap: 4px; margin-bottom: var(--s5); }
-    .ov-verdict-ic { width: 44px; height: 44px; border-radius: 50%; margin-bottom: 6px;
+    /* Hero: verdict + topology on one compact row */
+    .ov-hero { display: flex; align-items: center; gap: var(--s5); flex-wrap: wrap;
+      padding-block: var(--s4) var(--s3); }
+    .ov-verdict-c { display: flex; align-items: center; gap: 12px; text-align: left;
+      flex: 0 1 auto; min-width: 210px; }
+    .ov-verdict-ic { width: 40px; height: 40px; border-radius: 50%; flex: none;
       display: inline-flex; align-items: center; justify-content: center;
       background: var(--well); color: var(--ink-2); }
-    .ov-verdict-ic::before { content: '…'; font-size: 16px; font-weight: 700; }
+    .ov-verdict-ic::before { content: '…'; font-size: 15px; font-weight: 700; }
     .ov-verdict-ic[data-state="ok"]::before { content: '✓'; }
     .ov-verdict-ic[data-state="warn"]::before, .ov-verdict-ic[data-state="crit"]::before { content: '!'; }
     .ov-verdict-ic[data-state="ok"] { background: color-mix(in srgb, var(--lamp-ok) 16%, transparent); color: var(--ok); }
     .ov-verdict-ic[data-state="warn"] { background: color-mix(in srgb, var(--lamp-warn) 20%, transparent); color: var(--warn); }
     .ov-verdict-ic[data-state="crit"] { background: color-mix(in srgb, var(--lamp-crit) 15%, transparent); color: var(--crit); }
-    .ov-verdict-h { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); line-height: 1.2; }
+    .ov-verdict-txt { display: flex; flex-direction: column; min-width: 0; }
+    .ov-verdict-h { font-size: 1.15rem; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); line-height: 1.25; }
     .ov-verdict-h[data-state="warn"] { color: var(--warn); }
     .ov-verdict-h[data-state="crit"] { color: var(--crit); }
     .ov-verdict-sub { font-size: var(--t-sm); color: var(--ink-2); }
-    .ov-topo { display: flex; align-items: stretch; justify-content: center; flex-wrap: wrap; row-gap: var(--s4); }
-    .topo-node { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 8px;
-      border-radius: 12px; min-width: 104px; max-width: 156px; transition: background .15s; }
+    .ov-verdict-sub:empty { display: none; }
+    /* Topology: one chain of colored icon chips — Internet → router →
+       AP → satellites → clients. Each hop has its own hue so the chain
+       reads at a glance. */
+    .ov-topo { flex: 1 1 460px; display: flex; align-items: center; justify-content: flex-end;
+      flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+    .topo-node { display: flex; flex-direction: row; align-items: center; gap: 9px;
+      padding: 5px 12px 5px 5px; border-radius: 12px; transition: background .15s; text-align: left; }
     .topo-node:hover { background: var(--well); }
-    .topo-ic { width: 52px; height: 52px; border-radius: 14px;
+    .topo-ic { width: 36px; height: 36px; border-radius: 10px; flex: none;
       background: color-mix(in srgb, var(--accent) 10%, var(--panel)); color: var(--accent);
       display: inline-flex; align-items: center; justify-content: center; }
-    .topo-ic svg { width: 26px; height: 26px; }
+    .topo-ic svg { width: 19px; height: 19px; }
+    .topo-ic.k-globe   { background: color-mix(in srgb, #2563eb 13%, var(--panel)); color: #3b82f6; }
+    .topo-ic.k-router  { background: color-mix(in srgb, #8b5cf6 14%, var(--panel)); color: #8b5cf6; }
+    .topo-ic.k-ap      { background: color-mix(in srgb, #14b8a6 14%, var(--panel)); color: #14b8a6; }
+    .topo-ic.k-sat     { background: color-mix(in srgb, #f59e0b 15%, var(--panel)); color: #f59e0b; }
+    .topo-ic.k-clients { background: color-mix(in srgb, #22c55e 14%, var(--panel)); color: #22c55e; }
+    .topo-txt { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
     .topo-name { font-weight: 650; font-size: var(--t-sm); color: var(--ink); white-space: nowrap; }
-    .topo-sub { font-size: var(--t-xs); color: var(--ink-2); text-align: center; }
+    .topo-sub { font-size: var(--t-2xs); color: var(--ink-2); text-align: left; white-space: nowrap; }
     .topo-node.offline { opacity: .55; }
     .topo-node.offline .topo-ic { background: var(--well); color: var(--ink-3); }
-    .topo-link { flex: 1 1 72px; min-width: 64px; display: flex; flex-direction: column;
-      align-items: center; justify-content: center; gap: 2px; padding: 0 4px; align-self: center; }
+    .topo-link { flex: 0 1 68px; min-width: 58px; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 2px; padding: 0 2px; }
     .topo-link-line { width: 100%; height: 2px; border-radius: 1px;
       background: linear-gradient(90deg, var(--groove), var(--accent)); opacity: .6; }
     .topo-link.offline .topo-link-line {
@@ -254,17 +267,11 @@
     .topo-rate { font-size: var(--t-2xs); color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
     .topo-rate .dn { color: var(--dl); font-weight: 600; }
     .topo-rate .upv { color: var(--ul); font-weight: 600; }
-    /* Satellites hang off the AP downward, out of the main chain: they can
-       be powered off without breaking the Internet → router → AP → clients
-       path. Absolute positioning keeps the chain's icons aligned; the nav
-       reserves the extra height when satellites exist. */
-    .ov-topo.has-sats { padding-bottom: 138px; }
-    .topo-stack { position: relative; }
-    .topo-sats { position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
-      display: flex; flex-direction: column; align-items: center; }
-    .topo-sat-stub { width: 2px; height: 14px; border-radius: 1px;
-      background: linear-gradient(180deg, var(--accent), var(--groove)); opacity: .6; }
-    .topo-sat-stub.offline { background: repeating-linear-gradient(180deg, var(--lamp-off) 0 6px, transparent 6px 12px); }
+    /* Satellites sit inline right after the AP, joined by a short stub —
+       they can be powered off without breaking the chain behind them. */
+    .topo-sat-stub { width: 14px; height: 2px; border-radius: 1px; flex: none;
+      background: linear-gradient(90deg, var(--accent), var(--groove)); opacity: .6; }
+    .topo-sat-stub.offline { background: repeating-linear-gradient(90deg, var(--lamp-off) 0 6px, transparent 6px 12px); }
 
     /* Global window toolbar */
     .ov-winbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
@@ -356,9 +363,11 @@
     @media (max-width: 767px) {
       .ov-grid { grid-template-columns: 1fr; }
       .ov-sh-rows { grid-template-columns: 1fr; }
-      .ov-verdict-h { font-size: 1.35rem; }
-      .topo-node { min-width: 88px; }
-      .topo-ic { width: 44px; height: 44px; }
+      .ov-verdict-h { font-size: 1.05rem; }
+      .ov-hero { gap: var(--s3); }
+      .topo-node { padding: 4px 8px 4px 4px; }
+      .topo-ic { width: 32px; height: 32px; }
+      .topo-ic svg { width: 17px; height: 17px; }
       .ov-top-row .nm { flex-basis: 6rem; }
     }
     html:not([data-theme="dark"]) .ov-grid > .sect { margin-bottom: 0; }
@@ -723,8 +732,10 @@
       <section class="sect ov-hero">
         <div class="ov-verdict-c">
           <span class="ov-verdict-ic" id="ov-verdict-ic"></span>
-          <h1 class="ov-verdict-h" id="ov-verdict-h">Checking line health…</h1>
-          <p class="ov-verdict-sub" id="ov-verdict-sub">&nbsp;</p>
+          <span class="ov-verdict-txt">
+            <h1 class="ov-verdict-h" id="ov-verdict-h">Checking line health…</h1>
+            <p class="ov-verdict-sub" id="ov-verdict-sub"></p>
+          </span>
         </div>
         <nav id="ov-topo" class="ov-topo" aria-label="Network topology"></nav>
       </section>
@@ -3859,17 +3870,20 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     }
 
     /** Topology chain: Internet → NanoPi R6C → RBR50 → satellites →
-     *  clients. Built from the last Orbi snapshot — a powered-off
-     *  satellite renders dimmed and its link dashed. Nodes drill into
-     *  their tabs via data-tab-jump; rates refresh from SSE separately. */
+     *  clients, one compact row of colored icon chips. Built from the
+     *  last Orbi snapshot — a powered-off satellite renders dimmed and
+     *  its stub dashed. Nodes drill into their tabs via data-tab-jump;
+     *  rates refresh from SSE separately. */
     const ICON_GLOBE = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
     const ICON_CLIENTS = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+    const ICON_WIFI = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.859a10 10 0 0 1 14 0"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/></svg>';
+    const ICON_SAT = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 7 9 3 5 7l4 4"/><path d="m17 11 4 4-4 4-4-4"/><path d="m8 12 4 4 4-4-4-4Z"/><path d="M16 8c3-3 4-7 4-7s-4 1-7 4"/><path d="M17 11 13 7"/></svg>';
 
-    function topoNode(gotoTab, icon, name, sub, cls) {
+    function topoNode(gotoTab, icon, name, sub, cls, kind) {
       return '<button class="topo-node' + (cls ? ' ' + cls : '') + '" data-tab-jump="' + gotoTab + '">' +
-        '<span class="topo-ic">' + icon + '</span>' +
-        '<span class="topo-name">' + name + '</span>' +
-        '<span class="topo-sub">' + sub + '</span></button>';
+        '<span class="topo-ic k-' + (kind || 'generic') + '">' + icon + '</span>' +
+        '<span class="topo-txt"><span class="topo-name">' + name + '</span>' +
+        '<span class="topo-sub">' + sub + '</span></span></button>';
     }
     function topoLink(id, label, offline) {
       return '<span class="topo-link' + (offline ? ' offline' : '') + '"><span class="topo-link-line"></span>' +
@@ -3915,35 +3929,32 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       const apModel = h(lastOrbi.model || 'Orbi router');
       const apSub = apReachable ? 'Access point · ' + routerN + ' client' + (routerN === 1 ? '' : 's') : 'not responding';
 
-      const satStack = sats.map((s, i) => {
+      const satChain = sats.map((s) => {
         const k = (s.mac || '').toUpperCase();
         const off = s.online === false;
         const n = (perAp[k] || []).length;
         return '<span class="topo-sat-stub' + (off ? ' offline' : '') + '"></span>' +
-          topoNode('clients', ICON_ROUTER, h(s.model || s.name || s.mac),
+          topoNode('clients', ICON_SAT, h(s.model || s.name || s.mac),
             off ? 'offline' : 'Satellite · ' + n + ' client' + (n === 1 ? '' : 's'),
-            off ? 'offline' : '');
+            off ? 'offline' : '', 'sat');
       }).join('');
 
-      nav.classList.toggle('has-sats', sats.length > 0);
       nav.innerHTML =
-        topoNode('diag', ICON_GLOBE, 'Internet', 'Fiber · PPPoE') +
+        topoNode('diag', ICON_GLOBE, 'Internet', 'Fiber · PPPoE', '', 'globe') +
         topoLink('topo-wan-rate', '–') +
-        topoNode('system', ICON_ROUTER, 'NanoPi R6C', 'Router · CAKE') +
+        topoNode('system', ICON_ROUTER, 'NanoPi R6C', 'Router · CAKE', '', 'router') +
         topoLink('topo-lan-rate', apReachable ? '–' : 'offline', !apReachable) +
-        '<span class="topo-stack">' +
-          topoNode('clients', ICON_ROUTER, apModel, apSub, apReachable ? '' : 'offline') +
-          '<span class="topo-sats">' + satStack + '</span>' +
-        '</span>' +
+        topoNode('clients', ICON_WIFI, apModel, apSub, apReachable ? '' : 'offline', 'ap') +
+        satChain +
         topoLink('topo-wifi-rate', '–') +
-        topoNode('clients', ICON_CLIENTS, onlineN + ' Clients', 'online now');
+        topoNode('clients', ICON_CLIENTS, onlineN + ' Clients', 'online now', '', 'clients');
     }
 
     /** Cheap SSE-side refresh of the topology rate labels: WAN from the
      *  interface stats, per-AP sums from the cached client list. No DOM
      *  rebuild, so it can run on every sample. */
     function topoRateHtml(dn, up) {
-      return '<span class="dn">' + ovMbit(dn) + ' ↓</span> <span class="upv">' + ovMbit(up) + ' ↑</span> Mbps';
+      return '<span class="dn">' + ovMbit(dn) + '↓</span> <span class="upv">' + ovMbit(up) + '↑</span>';
     }
     function sumRates(list) {
       return (list || []).reduce((a, c) => a + (c.rx_rate || 0) + (c.tx_rate || 0), 0) / 2;
