@@ -756,6 +756,7 @@
           <button id="ov-int-apply" style="border:1px solid var(--groove);background:var(--well);color:var(--ink-2);border-radius:3px;padding:3px 9px;font-size:var(--t-xs);font-family:var(--f-num)">Apply</button>
         </span>
         <span id="ov-int-sub" class="xs muted hidden"></span>
+        <span id="ov-wan-head" class="sm muted" style="margin-left:auto;display:flex;gap:6px;align-items:baseline"></span>
       </div>
 
       <!-- Row 1: Internet · Gateway · Network -->
@@ -769,8 +770,7 @@
               <div class="ov-big-lab"><span class="ov-arrow ul">↑</span> Mbps up</div></div>
           </div>
           <div id="ov-int-chart"></div>
-          <div id="ov-int-stats" class="sm muted" style="display:flex;gap:14px;flex-wrap:wrap;margin-top:2px" title="now / average / peak over the charted window (10 s samples)"></div>
-          <div id="ov-wan-foot" class="sm muted ov-foot"></div>
+          <div id="ov-int-stats" class="sm muted" style="display:grid;grid-template-columns:auto repeat(3, minmax(3.4rem,auto)) auto;column-gap:12px;row-gap:2px;align-items:baseline;margin-top:2px" title="now / average / peak over the charted window (10 s samples)"></div>
           <div id="ov-warp" class="sm muted ov-foot"></div>
           <button id="ov-internet" class="link" title="Open line diagnostics (tunnel, latency quality, buffering)">Line diagnostics
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
@@ -4036,13 +4036,17 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       ovClients.forEach(c => {
         const k = group[(c.mac || '').toUpperCase()];
         if (!k) return;
-        sums[k] = (sums[k] || 0) + (c.rx_rate || 0) + (c.tx_rate || 0);
+        (sums[k] = sums[k] || { rx: 0, tx: 0 });
+        sums[k].rx += c.rx_rate || 0;
+        sums[k].tx += c.tx_rate || 0;
       });
-      const lan = sums.__router || 0;
-      let wifi = 0;
-      Object.keys(sums).forEach(k => { if (k !== '__router' && !satMacs[k]) wifi += sums[k]; });
-      set('topo-lan-rate', topoRateHtml(lan, lan));
-      set('topo-wifi-rate', topoRateHtml(wifi, wifi));
+      let lan = { rx: 0, tx: 0 }, wifi = { rx: 0, tx: 0 };
+      Object.keys(sums).forEach(k => {
+        const t = k === '__router' ? lan : (satMacs[k] ? null : wifi);
+        if (t) { t.rx += sums[k].rx; t.tx += sums[k].tx; }
+      });
+      set('topo-lan-rate', topoRateHtml(lan.rx, lan.tx));
+      set('topo-wifi-rate', topoRateHtml(wifi.rx, wifi.tx));
     }
 
     // Line health: WAN latency history from collectd ping probes.
@@ -4157,16 +4161,22 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       // direction — derived from the same series the chart draws.
       const stats = document.getElementById('ov-int-stats');
       if (stats) {
-        const dirStat = (arr, arrow) => {
-          const vals = (arr || []).slice(-n).filter(v => v != null && !isNaN(v));
-          if (!vals.length) return '';
-          const now = vals[vals.length - 1];
-          const avg = vals.reduce((a, v) => a + v, 0) / vals.length;
-          const peak = Math.max(...vals);
-          return `<span><span class="ov-arrow ${arrow === 'down' ? 'dl' : 'ul'}">${arrow === 'down' ? '↓' : '↑'}</span> ` +
-            `now <span class="num">${now.toFixed(1)}</span> · avg <span class="num">${avg.toFixed(1)}</span> · peak <span class="num">${peak.toFixed(1)}</span> Mbit/s</span>`;
+        const vals = arr => (arr || []).slice(-n).filter(v => v != null && !isNaN(v));
+        // Grid keeps the ↓ and ↑ rows column-aligned instead of drifting
+        // with each number's width.
+        const row = (arrow, cls, a) => {
+          if (!a.length) return '';
+          const now = a[a.length - 1], avg = a.reduce((x, v) => x + v, 0) / a.length, peak = Math.max(...a);
+          const num = v => `<span class="num" style="text-align:right">${v.toFixed(1)}</span>`;
+          return `<span class="ov-arrow ${cls}">${arrow}</span>` + num(now) + num(avg) + num(peak) +
+            '<span class="xs muted">Mbit/s</span>';
         };
-        stats.innerHTML = dirStat(d.wanrx, 'down') + dirStat(d.wantx, 'up') || '';
+        const dl = vals(d.wanrx), ul = vals(d.wantx);
+        if (dl.length || ul.length) {
+          const hdr = ['now', 'avg', 'peak'].map(l => `<span class="xs muted" style="text-align:right">${l}</span>`).join('');
+          stats.innerHTML = '<span></span>' + hdr + '<span></span>' +
+            row('↓', 'dl', dl) + row('↑', 'ul', ul);
+        } else stats.innerHTML = '';
       }
     }
 
@@ -4210,7 +4220,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         if (ovInc.count > 0) bits.push('<span class="warn">buffering ' + ovInc.count + '&times; in 24h</span>');
         else bits.push('no buffering in 24h');
       }
-      document.getElementById('ov-wan-foot').innerHTML =
+      document.getElementById('ov-wan-head').innerHTML =
         '<span class="row" style="gap:6px;align-items:baseline">' +
           lamp(worstOf([wan, hchecks.find(c => c.name === 'Internet line')]), 'sm') +
         '<span><span class="strong ink">WAN</span> · ' + (bits.join(' · ') || 'state unknown') + '</span></span>';
