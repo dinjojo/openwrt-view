@@ -3788,7 +3788,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     // charts, usage donut, top clients and events. 'billing' shows the
     // billing month for usage and a 7-day chart; the others query Victoria
     // Metrics for the exact span.
-    let intRange = 'billing';// 'billing' | '1h' | '3h' | 'custom'
+    let intRange = '3h';     // 'billing' | '1h' | '3h' | 'custom' (default 3h)
     let intCustom = null;    // { from, to } unix seconds, custom window only
     const intCache = {};     // window key -> { d, at }  (chart payloads)
     const winCache = {};     // window key -> { clients, at } (per-client GB)
@@ -4618,6 +4618,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (!b) return;
       intRange = b.dataset.intrange;
       _setPillBtns('.intrange-btn', 'intrange', intRange);
+      // Reveal/hide the from/to pickers right away — Custom must show its
+      // time-selection view even before anything is applied.
+      document.getElementById('ov-int-custom').classList.toggle('hidden', intRange !== 'custom');
       if (intRange === 'custom') {
         const f = document.getElementById('ov-int-from'), t = document.getElementById('ov-int-to');
         if (!f.value && !t.value) {          // sensible defaults: last 3 hours
@@ -4655,7 +4658,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     _setPillBtns('.intrange-btn', 'intrange', intRange);
     _setPillBtns('.wanrange-btn', 'wanrange', wanRange);
     _setPillBtns('.lhrange-btn', 'lhrange', lhRange);
-    syncLineHealth(); // Line health follows the global window from boot
+    onWindowChange(); // boot the window-driven panels on the default window
     // Restore the tab the user was on before a reload (e.g. theme toggle).
     let bootTab = 'overview';
     try { bootTab = sessionStorage.getItem('openwrtview-tab') || 'overview'; } catch (_) {}
