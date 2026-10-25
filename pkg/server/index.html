@@ -3049,8 +3049,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
             '<span class="strong ink">' + state + '</span>' +
             ' <span class="muted">&middot; ' + ovBytes(t.rx_bytes) + ' via tunnel &middot; ' + t.reconnects_24h + ' reconnects/24h</span>';
         } else {
-          el.innerHTML = '<span class="row" style="gap:6px;display:inline-flex">' + lamp('unknown', 'sm') + 'WARP tunnel</span> ' +
-            '<span class="muted">not in use — direct line</span>';
+          // Fallback (direct line) is already stated in the WAN foot line —
+          // showing it twice turned the card into a wall of text.
+          el.innerHTML = '';
         }
       } catch (_) {}
     }
@@ -4213,7 +4214,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         '<span class="row" style="gap:6px;align-items:baseline">' +
           lamp(worstOf([wan, hchecks.find(c => c.name === 'Internet line')]), 'sm') +
         '<span><span class="strong ink">WAN</span> · ' + (bits.join(' · ') || 'state unknown') + '</span></span>';
-      if (warp) document.getElementById('ov-warp').textContent = 'Exit path: ' + warp.value;
+      // The separate "Exit path" line was dropped — it duplicated the foot's
+      // "exit:" fragment. The tunnel poller renders its own line only when
+      // the WARP tunnel is actually in use (that detail is headline-worthy).
 
       // Gateway gauges from the system history payload (last sample).
       const gwState = document.getElementById('ov-gw-state');
