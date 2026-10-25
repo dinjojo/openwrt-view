@@ -1,10 +1,7 @@
-// Package ebpfacct provides per-device traffic accounting with an eBPF
-// program attached to a LAN interface's TC hooks. The kernel counts bytes
-// per client MAC inline on the packet path, so there is no feed to stall
-// and no state to reconstruct: the counters live in a kernel map, survive
-// a daemon restart (until the map is closed), and are read here once per
-// poll. The program only touches packet data (the Ethernet header), so it
-// needs no BTF on the target kernel.
+//go:build linux
+
+// Linux implementation: loads the embedded bytecode and attaches it to
+// the interface's TC (TCX) hooks. See shared.go for the portable surface.
 package ebpfacct
 
 import (
@@ -23,15 +20,9 @@ import (
 //go:embed counters.bpf.o
 var bpfFS embed.FS
 
-// Counters is the raw byte count for one device since the program was
-// attached. Monotonic; consumers diff across polls.
-type Counters struct {
-	Rx uint64
-	Tx uint64
-}
-
-// Collector owns the loaded eBPF objects and their TC attachments.
-type Collector struct {
+// linuxCollector holds the live kernel objects behind the portable
+// Collector surface.
+type linuxCollector struct {
 	mu    sync.Mutex
 	coll  *ebpf.Collection
 	links []link.Link
@@ -54,11 +45,11 @@ func Attach(iface string) (*Collector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load eBPF into kernel: %w", err)
 	}
-	c := &Collector{coll: coll, iface: iface}
+	lc := &linuxCollector{coll: coll, iface: iface}
 
 	ifIndex, err := net.InterfaceByName(iface)
 	if err != nil {
-		c.Close()
+		lc.close()
 		return nil, fmt.Errorf("ebpfacct: find %s: %w", iface, err)
 	}
 	for _, a := range []struct {
@@ -69,7 +60,7 @@ func Attach(iface string) (*Collector, error) {
 		{coll.Programs["count_to_client"], ebpf.AttachTCXEgress},
 	} {
 		if a.prog == nil {
-			c.Close()
+			lc.close()
 			return nil, errors.New("ebpfacct: program missing from object file")
 		}
 		l, err := link.AttachTCX(link.TCXOptions{
@@ -78,21 +69,25 @@ func Attach(iface string) (*Collector, error) {
 			Attach:    a.attach,
 		})
 		if err != nil {
-			c.Close()
+			lc.close()
 			return nil, fmt.Errorf("attach %s to %s: %w", a.attach, iface, err)
 		}
-		c.links = append(c.links, l)
+		lc.links = append(lc.links, l)
 	}
 	log.Printf("[ebpfacct] attached per-device counters to %s (tcx ingress+egress)", iface)
+
+	c := &Collector{}
+	c.read = func() (map[string]Counters, error) { return lc.read() }
+	c.close = lc.close
 	return c, nil
 }
 
 // Read returns every device's cumulative byte counters keyed by MAC
 // (lower-case colon-separated). The kernel map is authoritative.
-func (c *Collector) Read() (map[string]Counters, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	m := c.coll.Maps["device_bytes"]
+func (lc *linuxCollector) read() (map[string]Counters, error) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	m := lc.coll.Maps["device_bytes"]
 	if m == nil {
 		return nil, errors.New("ebpfacct: device_bytes map missing")
 	}
@@ -115,15 +110,15 @@ func (c *Collector) Read() (map[string]Counters, error) {
 	return out, nil
 }
 
-// Close detaches the TC hooks and unloads the program and map.
-func (c *Collector) Close() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, l := range c.links {
+// close detaches the TC hooks and unloads the program and map.
+func (lc *linuxCollector) close() {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	for _, l := range lc.links {
 		if err := l.Close(); err != nil {
-			log.Printf("[ebpfacct] detach %s: %v", c.iface, err)
+			log.Printf("[ebpfacct] detach %s: %v", lc.iface, err)
 		}
 	}
-	c.links = nil
-	c.coll.Close()
+	lc.links = nil
+	lc.coll.Close()
 }
