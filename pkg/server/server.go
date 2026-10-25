@@ -140,6 +140,10 @@ func New(addr string, interval time.Duration, histCap int, vmURL, version string
 func (s *Server) Run(ctx context.Context, addr string) error {
 	s.forcePoll()
 	s.wan = wan.New(ctx)
+	// Honest WAN latency: TCP-connect RTT, immune to the ISP's ICMP
+	// interceptor that reads fast under load. Falls back to collectd_ping
+	// wherever the connect series is still missing (older data).
+	wan.StartRTTMonitor(ctx, s.vmc, 30*time.Second)
 	s.sys = sysmon.NewAll(ctx)
 	s.events = events.New("/opt/monitoring/openwrt-view-events.json")
 	if s.alerts.Enabled() {
@@ -880,7 +884,11 @@ func (s *Server) handleAPIHistoryWAN(c fiber.Ctx) error {
 	defer cancel()
 
 	out := wanHistory{}
-	if se, err := s.vmc.QueryRange(ctx, `avg(collectd_ping)`, start, end, spec.step); err == nil && len(se) > 0 {
+	// Connect-RTT first (honest under load); ICMP fallback keeps history
+	// from before the monitor existed on the chart.
+	if se, err := s.vmc.QueryRange(ctx, `avg(wan_connect_rtt_ms)`, start, end, spec.step); err == nil && len(se) > 0 {
+		out.T, out.RTTMS = se[0].TS, se[0].Val
+	} else if se, err := s.vmc.QueryRange(ctx, `avg(collectd_ping)`, start, end, spec.step); err == nil && len(se) > 0 {
 		out.T, out.RTTMS = se[0].TS, se[0].Val
 	}
 	if se, err := s.vmc.QueryRange(ctx, `avg(collectd_ping_ping_droprate)`, start, end, spec.step); err == nil && len(se) > 0 {
@@ -992,8 +1000,14 @@ func (s *Server) handleAPIHistorySystem(c fiber.Ctx) error {
 	if err := fetchAvg(`collectd_conntrack{conntrack=""}`, &out.Conns); err != nil {
 		return c.Status(502).SendString(`{"error":"` + err.Error() + `"}`)
 	}
-	if err := fetchAvg(`collectd_ping{ping="8.8.8.8"}`, &out.WANRTT); err != nil {
+	// Connect-RTT (honest under load) with ICMP fallback for older windows.
+	if err := fetchAvg(`avg(wan_connect_rtt_ms)`, &out.WANRTT); err != nil {
 		return c.Status(502).SendString(`{"error":"` + err.Error() + `"}`)
+	}
+	if out.WANRTT == nil {
+		if err := fetchAvg(`collectd_ping{ping="8.8.8.8"}`, &out.WANRTT); err != nil {
+			return c.Status(502).SendString(`{"error":"` + err.Error() + `"}`)
+		}
 	}
 	// WAN link errors/drops per minute (hardware counters on the WAN device).
 	if err := fetchAvg(`60 * sum(rate(node_network_receive_errs_total{device=~"(wan|pppoe|eth0).*"}[`+spec.rateLimit+`]) + rate(node_network_transmit_errs_total{device=~"(wan|pppoe|eth0).*"}[`+spec.rateLimit+`]) + rate(node_network_receive_drop_total{device=~"(wan|pppoe|eth0).*"}[`+spec.rateLimit+`]) + rate(node_network_transmit_drop_total{device=~"(wan|pppoe|eth0).*"}[`+spec.rateLimit+`]) + rate(node_network_transmit_carrier_total{device=~"(wan|pppoe|eth0).*"}[`+spec.rateLimit+`]))`, &out.WANErrs); err != nil {

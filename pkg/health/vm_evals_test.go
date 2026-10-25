@@ -95,9 +95,10 @@ func lv(label, value string, val float64) sample {
 
 func TestEvalWANLatency(t *testing.T) {
 	const (
-		rtt  = `collectd_ping`
-		loss = `collectd_ping_ping_droprate`
-		base = `avg_over_time(collectd_ping[1h] offset 1w)`
+		rtt    = `collectd_ping`
+		rttTCP = `wan_connect_rtt_ms`
+		loss   = `collectd_ping_ping_droprate`
+		base   = `avg_over_time(collectd_ping[1h] offset 1w)`
 	)
 	pings := func(a, b float64) []sample { return []sample{lv("ping", "1.1.1.1", a), lv("ping", "8.8.8.8", b)} }
 	cases := []struct {
@@ -107,7 +108,9 @@ func TestEvalWANLatency(t *testing.T) {
 	}{
 		{"query error", &fakeVM{fail: map[string]bool{rtt: true}},
 			want{state: StateUnknown, value: "—", contains: []string{"ping query failed"}}},
-		{"no ping data", &fakeVM{}, want{state: StateWarn, value: "—", contains: []string{"collectd"}}},
+		{"no ping data", &fakeVM{}, want{state: StateWarn, value: "—", contains: []string{"RTT monitor"}}},
+		{"tcp rtt preferred", &fakeVM{data: map[string][]sample{rtt: pings(100, 100), rttTCP: []sample{lv("target", "8.8.8.8", 5)}}},
+			want{state: StateOK, value: "5.0 ms avg", contains: []string{"8.8.8.8"}}},
 		{"healthy", &fakeVM{data: map[string][]sample{rtt: pings(10, 20), loss: v(0)}},
 			want{state: StateOK, value: "15.0 ms avg", contains: []string{"20.0 ms to 8.8.8.8, 0.0% loss"}}},
 		{"slow host warns", &fakeVM{data: map[string][]sample{rtt: pings(10, 60)}},

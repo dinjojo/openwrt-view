@@ -517,14 +517,23 @@ func evalWANLatency(ctx context.Context, client *vm.Client) Check {
 	if client == nil {
 		return Check{Name: name, State: StateUnknown, Value: "—", NumState: -1, Detail: "VictoriaMetrics not configured"}
 	}
-	rtts, err := client.Query(ctx, `collectd_ping`)
+	// TCP-connect RTT first: ICMP can read falsely fast under load on this
+	// ISP (the interceptor answers echoes before the shaper), so judge the
+	// line by a metric the interceptor cannot fake. Falls back to ICMP for
+	// windows/metrics that predate the monitor.
+	rttMetric, hostLabel := `wan_connect_rtt_ms`, "target"
+	rtts, err := client.Query(ctx, rttMetric)
+	if err != nil || len(rtts) == 0 {
+		rttMetric, hostLabel = `collectd_ping`, "ping"
+		rtts, err = client.Query(ctx, rttMetric)
+	}
 	if err != nil {
 		return Check{Name: name, State: StateUnknown, Value: "—", NumState: -1, Detail: "ping query failed: " + err.Error()}
 	}
 	losses, _ := client.Query(ctx, `collectd_ping_ping_droprate`)
 
 	if len(rtts) == 0 {
-		return Check{Name: name, State: StateWarn, Value: "—", NumState: 1, Detail: "no WAN latency data — is collectd ping plugin running?"}
+		return Check{Name: name, State: StateWarn, Value: "—", NumState: 1, Detail: "no WAN latency data — is the RTT monitor running?"}
 	}
 
 	worstRTT := 0.0
@@ -534,10 +543,13 @@ func evalWANLatency(ctx context.Context, client *vm.Client) Check {
 		sumRTT += p.Val
 		if p.Val > worstRTT {
 			worstRTT = p.Val
-			worstHost = p.Labels["ping"]
+			worstHost = p.Labels[hostLabel]
 		}
 	}
 	avgRTT := sumRTT / float64(len(rtts))
+	if worstHost == "" {
+		worstHost = "WAN (TCP connect)"
+	}
 
 	maxLoss := 0.0
 	for _, p := range losses {
@@ -556,7 +568,7 @@ func evalWANLatency(ctx context.Context, client *vm.Client) Check {
 
 	// Baseline: compare this hour against the same hour a week ago so the
 	// verdict reflects what is normal for this network, not a fixed number.
-	basePts, _ := client.Query(ctx, `avg_over_time(collectd_ping[1h] offset 1w)`)
+	basePts, _ := client.Query(ctx, `avg_over_time(`+rttMetric+`[1h] offset 1w)`)
 	baseline := 0.0
 	if len(basePts) > 0 {
 		sum := 0.0
