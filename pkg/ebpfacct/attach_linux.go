@@ -93,7 +93,11 @@ func (lc *linuxCollector) read() (map[string]Counters, error) {
 	}
 	var (
 		key  uint64
-		val  struct{ Rx, Tx uint64 }
+		// Field order mirrors struct dev_counters in counters.c:
+		// up = bytes FROM the client (its upload), down = bytes TO the
+		// client (its download). Counters is device-centric: Rx is the
+		// client's download, Tx its upload.
+		val  struct{ Up, Down uint64 }
 		out  = map[string]Counters{}
 		iter = m.Iterate()
 	)
@@ -102,7 +106,7 @@ func (lc *linuxCollector) read() (map[string]Counters, error) {
 			byte(key >> 40), byte(key >> 32), byte(key >> 24),
 			byte(key >> 16), byte(key >> 8), byte(key),
 		}.String()
-		out[mac] = Counters{Rx: val.Rx, Tx: val.Tx}
+		out[mac] = Counters{Rx: val.Down, Tx: val.Up}
 	}
 	if err := iter.Err(); err != nil {
 		return nil, err

@@ -7,8 +7,9 @@ map once per poll and carries totals across counter resets.
 
 ## Files
 
-- `ebpf/counters.c` — the eBPF program (ingress counts rx per source MAC,
-  egress counts tx per destination MAC, shared LRU hash map).
+- `ebpf/counters.c` — the eBPF program (ingress counts bytes FROM the
+  client per source MAC = upload; egress counts bytes TO the client per
+  destination MAC = download; shared LRU hash map).
 - `counters.bpf.o` — compiled bytecode, embedded in the binary via
   go:embed. Committed because the build host may lack clang.
 - `ebpfacct.go` — loader (cilium/ebpf), TCX attach, map reader.

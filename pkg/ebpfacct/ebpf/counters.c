@@ -1,8 +1,10 @@
 // Per-device traffic counter for TC: one eBPF program per direction,
-// sharing one LRU hash map keyed by the client MAC. Ingress counts
-// bytes FROM the client (source MAC, rx); egress counts bytes TO the
-// client (destination MAC, tx). No kernel-internal types are touched,
-// so no BTF is required on the target kernel.
+// sharing one LRU hash map keyed by the client MAC. Ingress counts bytes
+// FROM the client (source MAC, `up` = the client's upload); egress counts
+// bytes TO the client (destination MAC, `down` = the client's download).
+// The Go loader maps these device-centrically (Rx = down, Tx = up). No
+// kernel-internal types are touched, so no BTF is required on the target
+// kernel.
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <bpf/bpf_helpers.h>
@@ -11,8 +13,8 @@
 #include <linux/pkt_cls.h>
 
 struct dev_counters {
-    __u64 rx;
-    __u64 tx;
+    __u64 up;    // bytes FROM the client (ingress, source MAC)
+    __u64 down;  // bytes TO the client (egress, destination MAC)
 };
 
 struct {
@@ -47,7 +49,7 @@ int count_from_client(struct __sk_buff *skb) {
         return TC_ACT_OK;
     struct dev_counters *c = counter_for(mac_key(eth->h_source));
     if (c)
-        __sync_fetch_and_add(&c->rx, skb->len);
+        __sync_fetch_and_add(&c->up, skb->len);
     return TC_ACT_OK;
 }
 
@@ -60,7 +62,7 @@ int count_to_client(struct __sk_buff *skb) {
         return TC_ACT_OK;
     struct dev_counters *c = counter_for(mac_key(eth->h_dest));
     if (c)
-        __sync_fetch_and_add(&c->tx, skb->len);
+        __sync_fetch_and_add(&c->down, skb->len);
     return TC_ACT_OK;
 }
 

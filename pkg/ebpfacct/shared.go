@@ -11,8 +11,10 @@
 // builds unchanged on every release target.
 package ebpfacct
 
-// Counters is the raw byte count for one device since the program was
-// attached. Monotonic; consumers diff across polls.
+// Counters is one device's cumulative byte count since the program was
+// attached, device-centric: Rx is the client's download (bytes the map
+// saw TO its MAC), Tx its upload (bytes FROM its MAC). Monotonic;
+// consumers diff across polls.
 type Counters struct {
 	Rx uint64
 	Tx uint64
