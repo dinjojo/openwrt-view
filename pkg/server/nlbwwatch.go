@@ -61,6 +61,10 @@ func (s *Server) watchAccounting(ctx context.Context) {
 				continue
 			}
 			log.Logger.Warn().Msg("nlbwmon accounting was stuck; restarted nlbwmon")
+			// A restart re-dumps conntrack and steps every counter up by
+			// the surviving entries' bytes; drop the rate baselines so
+			// that bookkeeping step is not read as traffic.
+			s.clientStore.Reanchor()
 			s.events.Add("monitor", "warn",
 				"Per-device accounting (nlbwmon) was stuck — restarted it automatically; per-device counting resumed")
 		}

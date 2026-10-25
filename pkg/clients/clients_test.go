@@ -369,15 +369,26 @@ func TestPollComputesRates(t *testing.T) {
 		line           string
 		wantRx, wantTx float64
 		wantActive     bool
+		shiftRateAt    time.Duration // age the held rate before the poll
 	}{
-		{"traffic since last poll", "aa:bb:cc:00:00:01 1 11000 1 2500 1\n", 1000, 200, true},
-		{"idle", "aa:bb:cc:00:00:01 1 11000 1 2500 1\n", 0, 0, false},
-		{"accounting period reset", "aa:bb:cc:00:00:01 1 10 1 5 1\n", 0, 0, false},
+		// A counter change divides the delta by the time it took (anchored
+		// at 10s before), and the rate then holds across idle polls until
+		// rateHold expires — nlbwmon only refreshes every 30s.
+		{"traffic since last poll", "aa:bb:cc:00:00:01 1 11000 1 2500 1\n", 1000, 200, true, 0},
+		{"idle holds the recent rate", "aa:bb:cc:00:00:01 1 11000 1 2500 1\n", 1000, 200, true, 0},
+		{"idle past the hold window", "aa:bb:cc:00:00:01 1 11000 1 2500 1\n", 0, 0, false, -time.Minute},
+		{"accounting period reset", "aa:bb:cc:00:00:01 1 10 1 5 1\n", 0, 0, false, 0},
 	}
 	for _, st := range steps {
 		env.set("nlbw", st.line, 0)
 		s.mu.Lock()
-		s.prevAt = s.prevAt.Add(-10 * time.Second) // pretend a 10s interval
+		for mac, a := range s.anchor { // pretend the counters took 10s to move
+			a.at = a.at.Add(-10 * time.Second)
+			if st.shiftRateAt != 0 {
+				a.rateAt = a.rateAt.Add(st.shiftRateAt)
+			}
+			s.anchor[mac] = a
+		}
 		s.mu.Unlock()
 		before := time.Now().Unix()
 		if err := s.poll(); err != nil {
@@ -433,7 +444,12 @@ func TestPollMarksVanishedClientsOffline(t *testing.T) {
 	// Second poll: the phone has traffic, so it is online with live rates.
 	env.set("nlbw", "aa:bb:cc:00:00:01 4 11000 1 2500 1\n00:11:22:33:44:55 2 2000 1 700 1\n", 0)
 	s.mu.Lock()
-	s.prevAt = s.prevAt.Add(-10 * time.Second)
+	for mac, a := range s.anchor { // pretend the counters took 10s to move
+		if mac == "aa:bb:cc:00:00:01" {
+			a.at = a.at.Add(-10 * time.Second)
+			s.anchor[mac] = a
+		}
+	}
 	s.mu.Unlock()
 	if err := s.poll(); err != nil {
 		t.Fatal(err)

@@ -3956,20 +3956,46 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     function topoRateHtml(dn, up) {
       return '<span class="dn">' + ovMbit(dn) + '↓</span> <span class="upv">' + ovMbit(up) + '↑</span>';
     }
-    function sumRates(list) {
-      return (list || []).reduce((a, c) => a + (c.rx_rate || 0) + (c.tx_rate || 0), 0) / 2;
+    /** Rates grouped by which unit each client hangs off. The Orbi
+     *  device list carries no rate fields — the live rates live on the
+     *  client-store entries (/api/clients), so this maps client MACs to
+     *  their unit via the Orbi grouping and sums the store's rates. */
+    function topoGroups() {
+      const devs = (lastOrbi && lastOrbi.devices) || [];
+      const sats = (lastOrbi && lastOrbi.satellites) || [];
+      const satMacs = {};
+      sats.forEach(s => { satMacs[(s.mac || '').toUpperCase()] = s; });
+      const group = {};
+      devs.forEach(x => {
+        const mac = (x.mac || '').toUpperCase();
+        group[mac] = (x.contype === '2.4G' || x.contype === '5G')
+          ? (x.conn_orbi || '').toUpperCase()
+          : '__router';
+      });
+      return { group, satMacs };
     }
+
     function tickTopoRates() {
       const set = (id, txt) => { const el = document.getElementById(id); if (el && txt) el.innerHTML = txt; };
       if (latestIfaces.length) set('topo-wan-rate', topoRateHtml(wanDown(), wanUp()));
-      if (!ovClients) return;
-      const { perAp, satMacs } = topoPerAp();
-      // rx_rate/tx_rate already count the transfer twice (client rx + ap
-      // tx); halving keeps labels comparable with the WAN numbers.
-      set('topo-lan-rate', topoRateHtml(sumRates(perAp.__router), sumRates(perAp.__router)));
-      const wifi = Object.keys(perAp).filter(k => k !== '__router' && !satMacs[k])
-        .reduce((a, k) => a.concat(perAp[k]), []);
-      set('topo-wifi-rate', topoRateHtml(sumRates(wifi), sumRates(wifi)));
+      if (!ovClients || !lastOrbi) return;
+      const { group, satMacs } = topoGroups();
+      // nlbwmon counts each client's traffic exactly once (conntrack per
+      // client MAC), so the group sums are comparable with the WAN rate
+      // directly — no halving. Satellite clients are excluded from the
+      // Wi-Fi link label: their traffic rides the same AP uplink and the
+      // satellite node shows its own state.
+      const sums = {};
+      ovClients.forEach(c => {
+        const k = group[(c.mac || '').toUpperCase()];
+        if (!k) return;
+        sums[k] = (sums[k] || 0) + (c.rx_rate || 0) + (c.tx_rate || 0);
+      });
+      const lan = sums.__router || 0;
+      let wifi = 0;
+      Object.keys(sums).forEach(k => { if (k !== '__router' && !satMacs[k]) wifi += sums[k]; });
+      set('topo-lan-rate', topoRateHtml(lan, lan));
+      set('topo-wifi-rate', topoRateHtml(wifi, wifi));
     }
 
     // Line health: WAN latency history from collectd ping probes.

@@ -49,13 +49,27 @@ type sample struct {
 	at     time.Time
 }
 
+// nlbwAnchor is the rate baseline for one client: the counters at their
+// last observed change plus the rate computed from that change (held
+// between nlbwmon's 30s refreshes so panels don't flicker to zero).
+type nlbwAnchor struct {
+	rx, tx           int64
+	at               time.Time
+	rateRx, rateTx   float64
+	rateAt           time.Time
+}
+
+// rateHold is how long a computed rate stays on display after the counters
+// stop moving. Must comfortably exceed nlbwmon's refresh_interval (30s).
+const rateHold = 45 * time.Second
+
 // Store keeps the latest client snapshot and runs the poller.
 type Store struct {
 	mu          sync.RWMutex
 	clients     map[string]*Client // by MAC
-	prev        map[string]sample
+	anchor      map[string]nlbwAnchor // MAC -> counters at the last observed change (rate baseline)
+	present     map[string]bool       // MACs listed in the previous successful poll (reappearance resets the rate baseline)
 	seen        map[string]time.Time // MAC -> last successful poll listing it (drives eviction; unlike Client.LastSeen it ignores traffic)
-	prevAt      time.Time
 	interval    time.Duration
 	vmc         *vm.Client
 	nlbwPath    string
@@ -75,7 +89,8 @@ type Store struct {
 func New(interval time.Duration, vmURL string) *Store {
 	s := &Store{
 		clients:     map[string]*Client{},
-		prev:        map[string]sample{},
+		anchor:      map[string]nlbwAnchor{},
+		present:     map[string]bool{},
 		seen:        map[string]time.Time{},
 		interval:    interval,
 		leases:      map[string]string{},
@@ -130,6 +145,18 @@ func (s *Store) Available() bool {
 	return len(s.clients) > 0 || s.havePolled
 }
 
+// Reanchor drops every rate baseline, e.g. after the watchdog restarted
+// nlbwmon. A restart re-dumps conntrack, which adds the surviving entries'
+// byte counters on top of the persisted database — a one-time upward step
+// that is bookkeeping, not traffic. Re-anchoring keeps that step from
+// being divided into a fake rate spike.
+func (s *Store) Reanchor() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.anchor = map[string]nlbwAnchor{}
+	s.present = map[string]bool{}
+}
+
 // Run starts the poll loop until ctx is cancelled.
 func (s *Store) Run(ctx context.Context, vmClient *vm.Client) {
 	s.vmc = vmClient
@@ -150,8 +177,18 @@ func (s *Store) Run(ctx context.Context, vmClient *vm.Client) {
 	}
 }
 
+// pollTimeout caps one nlbw CSV dump. The nlbw client talks to the nlbwmon
+// daemon over a socket and can hang indefinitely — observed live as stray
+// `nlbw -c csv` processes piling up and the poll loop frozen on .Output()
+// with no data moving. Without a deadline a single hang stops per-client
+// collection forever (the watchdog restarting the daemon does not unblock
+// a wedged client process).
+const pollTimeout = 5 * time.Second
+
 func (s *Store) poll() error {
-	out, err := exec.Command(s.nlbwPath, "-c", "csv", "-g", "mac", "-q").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), pollTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, s.nlbwPath, "-c", "csv", "-g", "mac", "-q").Output()
 	if err != nil {
 		s.mu.Lock()
 		s.havePolled = false
@@ -197,12 +234,11 @@ func (s *Store) poll() error {
 		if c, ok := s.clients[mac]; ok {
 			delete(s.clients, c.MAC)
 			delete(s.seen, c.MAC)
-			delete(s.prev, c.MAC)
+			delete(s.anchor, c.MAC)
 		}
 	}
 	rows = slices.DeleteFunc(rows, func(r parsed) bool { return self[strings.ToLower(r.mac)] })
 
-	elapsed := now.Sub(s.prevAt).Seconds()
 	samples := map[string]sample{}
 	for _, r := range rows {
 		samples[r.mac] = sample{conns: r.conns, rx: r.rx, tx: r.tx, at: now}
@@ -228,14 +264,36 @@ func (s *Store) poll() error {
 			c.Vendor = s.vendorFor(r.mac)
 		}
 
-		// Rates from previous sample.
+		// Rate from the last counter CHANGE, not the last poll: nlbwmon
+		// refreshes its counters every refresh_interval (30s), so with a
+		// 1s poll loop the raw prev-sample difference is a spike-train —
+		// 29 zeros then one huge burst — and every panel reading it
+		// (topology links, client table) shows ~0. Dividing by the time
+		// the counters actually took to move gives a true average rate,
+		// held for rateHold so displays stay steady between refreshes.
 		c.RxRate, c.TxRate = 0, 0
-		if p, ok := s.prev[r.mac]; ok && elapsed > 0 && r.rx >= p.rx && r.tx >= p.tx {
-			c.RxRate = float64(r.rx-p.rx) / elapsed
-			c.TxRate = float64(r.tx-p.tx) / elapsed
-		}
-		if c.RxRate > 0 || c.TxRate > 0 {
-			c.LastSeen = now.Unix()
+		a := s.anchor[r.mac]
+		switch {
+		case a.at.IsZero() || !s.present[r.mac] || r.rx < a.rx || r.tx < a.tx:
+			// First sighting, reappearance after absence (traffic during
+			// the gap happened at unknown times), or a counter reset
+			// (nlbwmon restart / accounting rollover): re-anchor silently.
+			s.anchor[r.mac] = nlbwAnchor{rx: r.rx, tx: r.tx, at: now}
+		case r.rx > a.rx || r.tx > a.tx:
+			if dt := now.Sub(a.at).Seconds(); dt > 0 {
+				a.rateRx = float64(r.rx-a.rx) / dt
+				a.rateTx = float64(r.tx-a.tx) / dt
+				a.rateAt = now
+				c.RxRate, c.TxRate = a.rateRx, a.rateTx
+				c.LastSeen = now.Unix()
+			}
+			a.rx, a.tx, a.at = r.rx, r.tx, now
+			s.anchor[r.mac] = a
+		default:
+			// Counters unchanged since the last change: hold the rate.
+			if now.Sub(a.rateAt) < rateHold {
+				c.RxRate, c.TxRate = a.rateRx, a.rateTx
+			}
 		}
 		c.Online = online[strings.ToLower(r.mac)] || c.RxRate > 0 || c.TxRate > 0
 		s.seen[r.mac] = now
@@ -257,6 +315,7 @@ func (s *Store) poll() error {
 		if now.Sub(seen) > evictAfter {
 			delete(s.clients, mac)
 			delete(s.seen, mac)
+			delete(s.anchor, mac)
 			continue
 		}
 		c.Online = false
@@ -264,9 +323,13 @@ func (s *Store) poll() error {
 		c.Conns = 0
 	}
 
-	// Rebuild the map of previous samples (rate baselines) for next round.
-	s.prev = samples
-	s.prevAt = now
+	// Rate baselines (anchors) intentionally survive absence so a client
+	// that reappears mid-refresh still gets a correct rate denominator;
+	// the presence map is what detects the reappearance.
+	s.present = make(map[string]bool, len(samples))
+	for mac := range samples {
+		s.present[mac] = true
+	}
 	s.mu.Unlock() // release before the (potentially slow) VM import
 
 	if s.vmc != nil {
