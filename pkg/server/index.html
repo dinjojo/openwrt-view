@@ -769,6 +769,7 @@
               <div class="ov-big-lab"><span class="ov-arrow ul">↑</span> Mbps up</div></div>
           </div>
           <div id="ov-int-chart"></div>
+          <div id="ov-int-stats" class="sm muted" style="display:flex;gap:14px;flex-wrap:wrap;margin-top:2px" title="now / average / peak over the charted window (10 s samples)"></div>
           <div id="ov-wan-foot" class="sm muted ov-foot"></div>
           <div id="ov-warp" class="sm muted ov-foot"></div>
           <button id="ov-internet" class="link" title="Open line diagnostics (tunnel, latency quality, buffering)">Line diagnostics
@@ -4151,6 +4152,21 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           { label: 'Download (Mbit/s)', data: (d.wanrx || []).slice(-n), stroke: cv('--dl'), fill: cva('--dl', 0.10) },
           { label: 'Upload (Mbit/s)', data: (d.wantx || []).slice(-n), stroke: cv('--ul') },
         ], '', v => v.toFixed(1), 'ov-x');
+      // LuCI-style now / average / peak for the charted window, per
+      // direction — derived from the same series the chart draws.
+      const stats = document.getElementById('ov-int-stats');
+      if (stats) {
+        const dirStat = (arr, arrow) => {
+          const vals = (arr || []).slice(-n).filter(v => v != null && !isNaN(v));
+          if (!vals.length) return '';
+          const now = vals[vals.length - 1];
+          const avg = vals.reduce((a, v) => a + v, 0) / vals.length;
+          const peak = Math.max(...vals);
+          return `<span><span class="ov-arrow ${arrow === 'down' ? 'dl' : 'ul'}">${arrow === 'down' ? '↓' : '↑'}</span> ` +
+            `now <span class="num">${now.toFixed(1)}</span> · avg <span class="num">${avg.toFixed(1)}</span> · peak <span class="num">${peak.toFixed(1)}</span> Mbit/s</span>`;
+        };
+        stats.innerHTML = dirStat(d.wanrx, 'down') + dirStat(d.wantx, 'up') || '';
+      }
     }
 
     function ovGauge(label, fmt, frac, state) {
