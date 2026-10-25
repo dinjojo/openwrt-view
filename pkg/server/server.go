@@ -26,6 +26,7 @@ import (
 
 	"github.com/dinjojo/openwrt-view/pkg/alerts"
 	"github.com/dinjojo/openwrt-view/pkg/clients"
+	"github.com/dinjojo/openwrt-view/pkg/ebpfacct"
 	"github.com/dinjojo/openwrt-view/pkg/events"
 	"github.com/dinjojo/openwrt-view/pkg/health"
 	"github.com/dinjojo/openwrt-view/pkg/history"
@@ -63,10 +64,11 @@ type Server struct {
 	healthCache  []health.Check
 	healthAt     time.Time
 	clientStore  *clients.Store
+	ebpf         *ebpfacct.Collector // eBPF per-device counters; nil unless EnableEBPFAcct
 	wan          *wan.Poller
 	sys          *sysmon.Pollers
 	orbi         *orbi.Poller
-	tapo         *tapo.Poller // smart-plug poller; nil when unconfigured
+	tapo         *tapo.Poller     // smart-plug poller; nil when unconfigured
 	shell        *orbissn.Poller  // Orbi shell (SSH/telnet) poller; nil or disabled when unconfigured
 	radio        *radio.Collector // local monitor-mode dongle; nil or disabled when unconfigured
 	alerts       *alerts.Notifier // ntfy push; nil when unconfigured
@@ -164,10 +166,36 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	go s.clientStore.Run(ctx, s.vmc) // per-client accounting poller
 	go func() {
 		<-ctx.Done()
+		if s.ebpf != nil {
+			s.ebpf.Close()
+		}
 		_ = s.app.Shutdown()
 	}()
 	log.Logger.Info().Str("addr", addr).Dur("interval", s.pollInterval).Msg("listening")
 	return s.app.Listen(addr)
+}
+
+// EnableEBPFAcct attaches the eBPF per-device byte counters to iface and
+// serves their raw values at /api/acct-ebpf. Spike phase: the counters
+// run alongside nlbwmon so the two can be compared before the eBPF path
+// becomes the primary source.
+func (s *Server) EnableEBPFAcct(iface string) error {
+	col, err := ebpfacct.Attach(iface)
+	if err != nil {
+		return err
+	}
+	s.ebpf = col
+	// The kernel map becomes the per-client data source: same store, same
+	// API surface, same charts — different counter source.
+	s.clientStore.SetEBPF(col)
+	s.app.Get("/api/acct-ebpf", func(c fiber.Ctx) error {
+		devices, err := col.Read()
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(fiber.Map{"iface": iface, "devices": devices})
+	})
+	return nil
 }
 
 func (s *Server) forcePoll() {

@@ -3495,9 +3495,11 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
 
       // Problems get a full row with the plain-language verdict; healthy
       // checks collapse into a handful of category keys so the eye lands on
-      // what is wrong instead of scanning 15 same-looking entries.
-      const problems = checks.filter(c => c.state === 'warn' || c.state === 'crit');
-      const fine = checks.filter(c => c.state !== 'warn' && c.state !== 'crit');
+      // what is wrong instead of scanning 15 same-looking entries. Minor
+      // checks (WARP fallback, clock drift) are information, not problems —
+      // they live in the category-key tooltips instead of taking a row.
+      const problems = checks.filter(c => !c.minor && (c.state === 'warn' || c.state === 'crit'));
+      const fine = checks.filter(c => c.minor || (c.state !== 'warn' && c.state !== 'crit'));
 
       const rowsHTML = problems.map(c =>
         '<div class="check">' + lamp(c.state) +

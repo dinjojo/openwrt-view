@@ -61,6 +61,7 @@ func main() {
 	// (uci zonename, else /etc/TZ) as OPENWRT_VIEW_TZ.
 	tzName := flag.String("tz", envOr("OPENWRT_VIEW_TZ", "Local"), "time zone for day boundaries and the probe schedule: IANA name (Asia/Kolkata), POSIX string without DST (IST-5:30) or Local")
 	showVer := flag.Bool("version", false, "print version and exit")
+	ebpfIface := flag.String("acct-ebpf", "", "interface to count per-device traffic on with eBPF (e.g. br-lan; empty disables the spike collector)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "openwrt-view %s\n\n", Version)
@@ -157,6 +158,11 @@ func main() {
 		TelnetPass: *orbiTelnetPass,
 	}))
 	srv.SetRadioCollector(radio.New(*radioIface))
+	if *ebpfIface != "" {
+		if err := srv.EnableEBPFAcct(*ebpfIface); err != nil {
+			log.Logger.Warn().Err(err).Str("iface", *ebpfIface).Msg("eBPF accounting unavailable; continuing without it")
+		}
+	}
 	if *tapoHost != "" {
 		srv.SetTapoPoller(tapo.New(tapo.Config{Host: *tapoHost, User: *tapoUser, Pass: *tapoPass}, nil))
 		log.Logger.Info().Str("host", *tapoHost).Msg("Tapo plug monitoring enabled")

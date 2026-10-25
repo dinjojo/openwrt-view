@@ -1,6 +1,8 @@
-// Package clients collects per-LAN-client traffic accounting from nlbwmon
-// (conntrack netlink counters), resolves friendly names from DHCP leases and
-// neighbour states, computes live rates and pushes cumulative counters into
+// Package clients collects per-LAN-client traffic accounting. Primary
+// source is the eBPF per-MAC counter (kernel map, no stall/double-count
+// failure modes); nlbwmon remains the fallback when no eBPF collector is
+// configured. It resolves friendly names from DHCP leases and neighbour
+// states, computes live rates and pushes cumulative counters into
 // VictoriaMetrics so per-client history is queryable.
 package clients
 
@@ -20,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dinjojo/openwrt-view/pkg/ebpfacct"
 	"github.com/dinjojo/openwrt-view/pkg/vm"
 )
 
@@ -53,10 +56,10 @@ type sample struct {
 // last observed change plus the rate computed from that change (held
 // between nlbwmon's 30s refreshes so panels don't flicker to zero).
 type nlbwAnchor struct {
-	rx, tx           int64
-	at               time.Time
-	rateRx, rateTx   float64
-	rateAt           time.Time
+	rx, tx         int64
+	at             time.Time
+	rateRx, rateTx float64
+	rateAt         time.Time
 }
 
 // rateHold is how long a computed rate stays on display after the counters
@@ -66,13 +69,21 @@ const rateHold = 45 * time.Second
 // Store keeps the latest client snapshot and runs the poller.
 type Store struct {
 	mu          sync.RWMutex
-	clients     map[string]*Client // by MAC
+	clients     map[string]*Client    // by MAC
 	anchor      map[string]nlbwAnchor // MAC -> counters at the last observed change (rate baseline)
 	present     map[string]bool       // MACs listed in the previous successful poll (reappearance resets the rate baseline)
-	seen        map[string]time.Time // MAC -> last successful poll listing it (drives eviction; unlike Client.LastSeen it ignores traffic)
+	seen        map[string]time.Time  // MAC -> last successful poll listing it (drives eviction; unlike Client.LastSeen it ignores traffic)
 	interval    time.Duration
 	vmc         *vm.Client
 	nlbwPath    string
+	ebpf        ebpfSource          // set: poll the kernel map instead of nlbwmon
+	carry       map[string][2]int64 // MAC -> bytes added to raw eBPF counters (rx, tx) after resets
+	lastRaw     map[string][2]int64 // MAC -> raw eBPF counters at the previous poll
+	statePath   string              // persisted carry state so totals survive reboots
+	carryDirty  bool
+	carryAt     time.Time      // last carry persist
+	connsByIP   map[string]int // conntrack entries per IP (eBPF path, refreshed every connsEvery)
+	connsAt     time.Time
 	leasesAt    time.Time
 	leases      map[string]string // MAC -> hostname (refreshed every 10 min)
 	staticHosts map[string]string // MAC -> static lease name from /etc/config/dhcp
@@ -83,6 +94,25 @@ type Store struct {
 	netSysDir   string            // /sys/class/net, overridable in tests
 	httpClient  *http.Client
 	havePolled  bool
+}
+
+// ebpfSource is the part of the eBPF collector the store needs; a small
+// interface so tests can fake it.
+type ebpfSource interface {
+	Read() (map[string]ebpfacct.Counters, error)
+}
+
+// SetEBPF makes the eBPF kernel counters the per-client data source.
+// Totals are carried across counter resets (daemon restarts, reboots) so
+// per-device lifetime usage stays monotonic; see poll.
+func (s *Store) SetEBPF(c *ebpfacct.Collector) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ebpf = c
+	if s.statePath == "" {
+		s.statePath = "/opt/monitoring/ebpf-carry.json"
+	}
+	s.loadCarry()
 }
 
 // New creates a Store. vmURL may be empty to disable history pushes.
@@ -185,23 +215,13 @@ func (s *Store) Run(ctx context.Context, vmClient *vm.Client) {
 // a wedged client process).
 const pollTimeout = 5 * time.Second
 
-func (s *Store) poll() error {
+// pollNLBW reads per-device counters from nlbwmon (fallback source).
+func (s *Store) pollNLBW() ([]parsed, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), pollTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, s.nlbwPath, "-c", "csv", "-g", "mac", "-q").Output()
 	if err != nil {
-		s.mu.Lock()
-		s.havePolled = false
-		s.mu.Unlock()
-		return err
-	}
-
-	now := time.Now()
-	type parsed struct {
-		mac   string
-		conns int
-		rx    int64
-		tx    int64
+		return nil, err
 	}
 	var rows []parsed
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -216,8 +236,168 @@ func (s *Store) poll() error {
 		conns, _ := strconv.Atoi(f[1])
 		rx, _ := strconv.ParseInt(f[2], 10, 64)
 		tx, _ := strconv.ParseInt(f[4], 10, 64)
-		rows = append(rows, parsed{mac, conns, rx, tx})
+		rows = append(rows, parsed{mac: mac, conns: conns, rx: rx, tx: tx})
 	}
+	return rows, nil
+}
+
+// carryEvery is how often the eBPF carry state is persisted.
+const carryEvery = 5 * time.Minute
+
+// pollEBPF reads the kernel map and turns raw counters into carried
+// totals. The map is recreated whenever the daemon restarts or the
+// router reboots, which drops raw counters to zero: on a reset the raw
+// value that vanished is folded into the carry offset so per-device
+// totals stay monotonic, and the offsets are persisted so a reboot
+// (which loses both the map and our memory) only loses the traffic of
+// the final carryEvery window.
+func (s *Store) pollEBPF() ([]parsed, error) {
+	raw, err := s.ebpf.Read()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	s.mu.Lock()
+	rows := make([]parsed, 0, len(raw))
+	for mac, c := range raw {
+		rx, tx := int64(c.Rx), int64(c.Tx)
+		last := s.lastRaw[mac]
+		carry := s.carry[mac]
+		if rx < last[0] { // kernel map was recreated: fold in what vanished
+			carry[0] += last[0]
+		}
+		if tx < last[1] {
+			carry[1] += last[1]
+		}
+		if carry != s.carry[mac] {
+			s.carryDirty = true
+		}
+		s.carry[mac] = carry
+		s.lastRaw[mac] = [2]int64{rx, tx}
+		rows = append(rows, parsed{mac: mac, rx: rx + carry[0], tx: tx + carry[1]})
+	}
+	if s.carryDirty && now.Sub(s.carryAt) > carryEvery {
+		s.saveCarryLocked(now)
+	}
+	s.connsByIP = s.readConnsLocked(now)
+	s.mu.Unlock()
+	return rows, nil
+}
+
+// connsEvery is how often the eBPF path refreshes per-device connection
+// counts from /proc/net/nf_conntrack. The eBPF map counts bytes only;
+// conntrack supplies the connections column.
+const connsEvery = 10 * time.Second
+
+// readConnsLocked re-reads /proc/net/nf_conntrack at most every
+// connsEvery and returns entries per IP. Each conntrack line carries the
+// original and reply tuples (the same client IP appears as src in one and
+// dst in the other), so values are de-duplicated per line before counting.
+func (s *Store) readConnsLocked(now time.Time) map[string]int {
+	if s.connsByIP != nil && now.Sub(s.connsAt) <= connsEvery {
+		return s.connsByIP
+	}
+	counts := map[string]int{}
+	if data, err := os.ReadFile("/proc/net/nf_conntrack"); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			seen := map[string]bool{}
+			for _, f := range strings.Fields(line) {
+				if k, v, ok := strings.Cut(f, "="); ok && (k == "src" || k == "dst") && !seen[v] {
+					seen[v] = true
+					counts[v]++
+				}
+			}
+		}
+	}
+	s.connsByIP = counts
+	s.connsAt = now
+	return counts
+}
+
+// carryState is the persisted form of the carry offsets.
+type carryState struct {
+	MACs map[string]struct {
+		Carry [2]int64 `json:"carry"`
+		Last  [2]int64 `json:"last"`
+	} `json:"macs"`
+}
+
+func (s *Store) loadCarry() {
+	s.carry = map[string][2]int64{}
+	s.lastRaw = map[string][2]int64{}
+	data, err := os.ReadFile(s.statePath)
+	if err != nil {
+		return // fresh start
+	}
+	var st carryState
+	if json.Unmarshal(data, &st) != nil {
+		return
+	}
+	for mac, e := range st.MACs {
+		// Continue totals from the last persist: everything counted up
+		// to then is already in Carry+Last, and the fresh kernel map
+		// starts at zero.
+		s.carry[mac] = [2]int64{e.Carry[0] + e.Last[0], e.Carry[1] + e.Last[1]}
+		s.lastRaw[mac] = [2]int64{0, 0}
+	}
+}
+
+// saveCarryLocked persists the carry offsets atomically. Caller holds mu.
+func (s *Store) saveCarryLocked(now time.Time) {
+	st := carryState{MACs: map[string]struct {
+		Carry [2]int64 `json:"carry"`
+		Last  [2]int64 `json:"last"`
+	}{}}
+	for mac, c := range s.carry {
+		last := s.lastRaw[mac]
+		st.MACs[mac] = struct {
+			Carry [2]int64 `json:"carry"`
+			Last  [2]int64 `json:"last"`
+		}{Carry: c, Last: last}
+	}
+	if data, err := json.Marshal(st); err == nil {
+		tmp := s.statePath + ".tmp"
+		if os.WriteFile(tmp, data, 0o644) == nil {
+			if err := os.Rename(tmp, s.statePath); err == nil {
+				s.carryDirty = false
+				s.carryAt = now
+			}
+		}
+	}
+}
+
+// parsed is one device's cumulative counters from whichever source is
+// active. rx/tx are carried totals: raw counters plus anything accumulated
+// before a counter reset (daemon restart, reboot).
+type parsed struct {
+	mac   string
+	conns int
+	rx    int64
+	tx    int64
+}
+
+func (s *Store) poll() error {
+	var rows []parsed
+	if s.ebpf != nil {
+		var err error
+		rows, err = s.pollEBPF()
+		if err != nil {
+			s.mu.Lock()
+			s.havePolled = false
+			s.mu.Unlock()
+			return err
+		}
+	} else {
+		var err error
+		rows, err = s.pollNLBW()
+		if err != nil {
+			s.mu.Lock()
+			s.havePolled = false
+			s.mu.Unlock()
+			return err
+		}
+	}
+	now := time.Now()
 
 	s.refreshNames()
 	online, ips := readNeigh()
@@ -254,6 +434,11 @@ func (s *Store) poll() error {
 		c.RxTotal = r.rx
 		c.TxTotal = r.tx
 		c.IP = ips[strings.ToLower(r.mac)]
+		if s.ebpf != nil && c.IP != "" {
+			// The eBPF map counts bytes only; connection counts come
+			// from conntrack matched by the device's resolved IP.
+			c.Conns = s.connsByIP[c.IP]
+		}
 		if r.mac == "00:00:00:00:00:00" {
 			// nlbwmon's catch-all for traffic it cannot attribute to a MAC
 			// (locally originated or non-bridge interfaces).
