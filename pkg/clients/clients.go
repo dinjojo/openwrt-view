@@ -68,32 +68,34 @@ const rateHold = 45 * time.Second
 
 // Store keeps the latest client snapshot and runs the poller.
 type Store struct {
-	mu          sync.RWMutex
-	clients     map[string]*Client    // by MAC
-	anchor      map[string]nlbwAnchor // MAC -> counters at the last observed change (rate baseline)
-	present     map[string]bool       // MACs listed in the previous successful poll (reappearance resets the rate baseline)
-	seen        map[string]time.Time  // MAC -> last successful poll listing it (drives eviction; unlike Client.LastSeen it ignores traffic)
-	interval    time.Duration
-	vmc         *vm.Client
-	nlbwPath    string
-	ebpf        ebpfSource          // set: poll the kernel map instead of nlbwmon
-	carry       map[string][2]int64 // MAC -> bytes added to raw eBPF counters (rx, tx) after resets
-	lastRaw     map[string][2]int64 // MAC -> raw eBPF counters at the previous poll
-	statePath   string              // persisted carry state so totals survive reboots
-	carryDirty  bool
-	carryAt     time.Time      // last carry persist
-	connsByIP   map[string]int // conntrack entries per IP (eBPF path, refreshed every connsEvery)
-	connsAt     time.Time
-	leasesAt    time.Time
-	leases      map[string]string // MAC -> hostname (refreshed every 10 min)
-	staticHosts map[string]string // MAC -> static lease name from /etc/config/dhcp
-	hosts       map[string]string // IP -> hostname from /etc/hosts
-	vendors     map[string]string // OUI -> vendor name (cached + persisted)
-	namesAt     time.Time         // gate for the slow name-resolution cycle
-	namesPath   string            // persisted vendor cache
-	netSysDir   string            // /sys/class/net, overridable in tests
-	httpClient  *http.Client
-	havePolled  bool
+	mu            sync.RWMutex
+	clients       map[string]*Client    // by MAC
+	anchor        map[string]nlbwAnchor // MAC -> counters at the last observed change (rate baseline)
+	present       map[string]bool       // MACs listed in the previous successful poll (reappearance resets the rate baseline)
+	seen          map[string]time.Time  // MAC -> last successful poll listing it (drives eviction; unlike Client.LastSeen it ignores traffic)
+	interval      time.Duration
+	vmc           *vm.Client
+	nlbwPath      string
+	ebpf          ebpfSource          // set: poll the kernel map instead of nlbwmon
+	carry         map[string][2]int64 // MAC -> bytes added to raw eBPF counters (rx, tx) after resets
+	lastRaw       map[string][2]int64 // MAC -> raw eBPF counters at the previous poll
+	statePath     string              // persisted carry state so totals survive reboots
+	carryDirty    bool
+	carryAt       time.Time      // last carry persist
+	connsByIP     map[string]int // conntrack entries per IP (eBPF path, refreshed every connsEvery)
+	connsAt       time.Time
+	leasesAt      time.Time
+	leases        map[string]string // MAC -> hostname (refreshed every 10 min)
+	staticHosts   map[string]string // MAC -> static lease name from /etc/config/dhcp
+	hosts         map[string]string // IP -> hostname from /etc/hosts
+	vendors       map[string]string // OUI -> vendor name (cached + persisted)
+	namesAt       time.Time         // gate for the slow name-resolution cycle
+	namesPath     string            // persisted vendor cache
+	namesHist     map[string]string // MAC -> last known friendly name (persisted; keeps offline devices named)
+	namesHistPath string            // persisted friendly-name history
+	netSysDir     string            // /sys/class/net, overridable in tests
+	httpClient    *http.Client
+	havePolled    bool
 }
 
 // ebpfSource is the part of the eBPF collector the store needs; a small
@@ -118,24 +120,27 @@ func (s *Store) SetEBPF(c *ebpfacct.Collector) {
 // New creates a Store. vmURL may be empty to disable history pushes.
 func New(interval time.Duration, vmURL string) *Store {
 	s := &Store{
-		clients:     map[string]*Client{},
-		anchor:      map[string]nlbwAnchor{},
-		present:     map[string]bool{},
-		seen:        map[string]time.Time{},
-		interval:    interval,
-		leases:      map[string]string{},
-		staticHosts: map[string]string{},
-		hosts:       map[string]string{},
-		vendors:     map[string]string{},
-		namesPath:   "/tmp/cake-client-names.json",
-		netSysDir:   "/sys/class/net",
-		nlbwPath:    "/usr/sbin/nlbw",
-		httpClient:  &http.Client{Timeout: 5 * time.Second},
+		clients:       map[string]*Client{},
+		anchor:        map[string]nlbwAnchor{},
+		present:       map[string]bool{},
+		seen:          map[string]time.Time{},
+		interval:      interval,
+		leases:        map[string]string{},
+		staticHosts:   map[string]string{},
+		hosts:         map[string]string{},
+		vendors:       map[string]string{},
+		namesPath:     "/tmp/cake-client-names.json",
+		namesHist:     map[string]string{},
+		namesHistPath: "/opt/monitoring/client-names.json",
+		netSysDir:     "/sys/class/net",
+		nlbwPath:      "/usr/sbin/nlbw",
+		httpClient:    &http.Client{Timeout: 5 * time.Second},
 	}
 	if p, err := exec.LookPath("nlbw"); err == nil {
 		s.nlbwPath = p
 	}
 	s.loadNamesCache()
+	s.loadNamesHist()
 	return s
 }
 
@@ -158,14 +163,69 @@ func (s *Store) Snapshot() []Client {
 	return out
 }
 
-// Name returns the friendly name for a MAC (or the short MAC if unknown).
+// Name returns the friendly name for a MAC (or the MAC itself if unknown).
+// Falls back to the persisted name history so devices that are offline (or
+// vanished from nlbwmon after a restart) keep the name they were seen with.
 func (s *Store) Name(mac string) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if c, ok := s.clients[mac]; ok && c.Name != "" {
 		return c.Name
 	}
+	if name := s.namesHist[strings.ToLower(mac)]; name != "" {
+		return name
+	}
 	return mac
+}
+
+// NamesSnapshot returns the persisted MAC -> friendly-name history.
+func (s *Store) NamesSnapshot() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]string, len(s.namesHist))
+	for mac, name := range s.namesHist {
+		out[mac] = name
+	}
+	return out
+}
+
+// rememberName records a resolved friendly name for a MAC so offline
+// devices stay named across daemon restarts. Placeholder names
+// ("device-xxxx", "untracked") are not worth persisting.
+func (s *Store) rememberName(mac, name string) {
+	if name == "" || name == "untracked" || strings.HasPrefix(name, "device-") || strings.EqualFold(name, mac) {
+		return
+	}
+	mac = strings.ToLower(mac)
+	if s.namesHist[mac] == name {
+		return
+	}
+	s.namesHist[mac] = name
+	s.saveNamesHist()
+}
+
+// loadNamesHist reads the persisted MAC -> name history, if any.
+func (s *Store) loadNamesHist() {
+	b, err := os.ReadFile(s.namesHistPath)
+	if err != nil {
+		return
+	}
+	var hist map[string]string
+	if json.Unmarshal(b, &hist) == nil && hist != nil {
+		s.namesHist = hist
+	}
+}
+
+// saveNamesHist persists the MAC -> name history (atomic rename).
+func (s *Store) saveNamesHist() {
+	b, err := json.Marshal(s.namesHist)
+	if err != nil {
+		return
+	}
+	tmp := s.namesHistPath + ".tmp"
+	if os.WriteFile(tmp, b, 0644) == nil {
+		_ = os.Rename(tmp, s.namesHistPath)
+	}
 }
 
 // Available reports whether nlbw data has been collected at least once.
@@ -447,6 +507,7 @@ func (s *Store) poll() error {
 		} else {
 			c.Name = s.nameFor(r.mac, c.IP)
 			c.Vendor = s.vendorFor(r.mac)
+			s.rememberName(r.mac, c.Name)
 		}
 
 		// Rate from the last counter CHANGE, not the last poll: nlbwmon

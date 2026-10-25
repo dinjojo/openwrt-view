@@ -2,10 +2,18 @@
 # bufferbloat_probe.sh — active latency-under-load probe for OpenWrt + VictoriaMetrics
 #
 # Every run:
-#   1. Measures idle RTT (gateway + 1.1.1.1)
-#   2. Saturates download for ~14s with MULTIPLE parallel connections while pinging
-#   3. Saturates upload   for ~14s with MULTIPLE parallel connections while pinging
+#   1. Measures idle RTT (TCP connect to 1.1.1.1)
+#   2. Saturates download for ~14s with MULTIPLE parallel connections while
+#      sampling TCP-connect RTT
+#   3. Saturates upload   for ~14s with MULTIPLE parallel connections while
+#      sampling TCP-connect RTT
 #   4. Computes bufferbloat grade (Waveform scale) and pushes metrics to VM
+#
+# Why TCP connect, not ping: under load the ISP's PPP term proxy-answers
+# ICMP echo requests for arbitrary destination IPs (replies at ~0.6 ms,
+# generated in front of the shaper), so ping deltas under-report
+# bufferbloat and can even go negative. A SYN->SYN-ACK must be completed by
+# the real host, past the shaper where the queue delay actually lives.
 #
 # Why parallel connections: CAKE shares bandwidth fairly per flow, so a single
 # curl only gets a slice of the shaper (~150-260 Mbps of a 415 Mbit shaper)
@@ -21,14 +29,17 @@
 # Add to crontab:  */15 * * * * /opt/monitoring/scripts/bufferbloat_probe.sh
 
 VM_URL="${VM_URL:-http://127.0.0.1:8428}"
-INET_TARGET="${INET_TARGET:-1.1.1.1}"
+# INET target for the TCP-connect RTT probe. NOT 1.1.1.1: this ISP
+# intercepts it (ICMP echo gets proxy-answered by the interceptor in front
+# of the shaper, TCP 443 gets refused), which made every latency-under-load
+# reading bogus. 8.8.8.8 answers honestly.
+INET_TARGET="${INET_TARGET:-8.8.8.8}"
 UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 openwrt-view-bufferbloat-probe/1.5"
 BURST_TIMEOUT=20           # curl max time per individual transfer (s)
 DUR=14                     # seconds of sustained load per direction
 DOWN_WORKERS=12
 UP_WORKERS=4
 UP_PAYLOAD_MB=90           # __up accepts ~100MB POSTs; 90 is safe
-PING_COUNT=12              # samples per phase (1/s)
 MIN_BURST_BPS=10000000     # 10 Mbit/s: below this the burst didn't really load the line
 TMP=/opt/monitoring/tmp
 
@@ -67,20 +78,6 @@ log() { logger -t bufferbloat-probe "$*"; }
 
 # --- helpers -----------------------------------------------------------
 
-ping_stats() {  # $1=host -> echoes "avg loss"
-    local out
-    out=$(ping -c "$PING_COUNT" -W 2 -q "$1" 2>/dev/null | tail -2)
-    local loss avg
-    loss=$(echo "$out" | grep -o '[0-9.]*% packet loss' | grep -o '^[0-9.]*')
-    avg=$(echo "$out" | sed -n 's/.*min\/avg\/max[^=]*= [0-9.]*\/\([0-9.]*\)\/.*/\1/p')
-    [ -z "$avg" ] && { echo "0 100"; return; }
-    echo "$avg ${loss:-0}"
-}
-
-current_gateway() {
-    ip route show default 2>/dev/null | awk '{print $3; exit}'
-}
-
 grade_for() {  # $1 = bloat ms -> letter grade
     local b=$1
     if   [ -z "$b" ] || [ "$b" = "0" ]; then echo "n/a"
@@ -99,13 +96,8 @@ human_mbps() {
     awk "BEGIN{v=$1/1e6; if (v>=100) printf \"%.0f Mbps\", v; else printf \"%.1f Mbps\", v}"
 }
 
-# avg_rtt_from <ping output file> -> avg or 0
-avg_rtt_from() {
-    sed -n 's/.*min\/avg\/max[^=]*= [0-9.]*\/\([0-9.]*\)\/.*/\1/p' "$1" 2>/dev/null
-}
-
 # Keep pulling until the deadline; append "bytes code" lines per transfer
-# (only 200s are counted later). Pinned to one source: a long-lived
+ # (only 200s are counted later). Pinned to one source: a long-lived
 # connection per worker avoids re-handshakes and stays under each server's
 # concurrent-connection limit.
 down_worker() {  # $1=url
@@ -131,9 +123,9 @@ up_worker() {
     done
 }
 
-# burst_down <ping_target> -> echoes "avg_rtt speed_bps" (avg 0 if burst failed)
+# burst_down <unused> -> echoes "connect_rtt_ms speed_bps" (rtt 0 if burst failed)
 burst_down() {
-    local ptarget="$1" url probe_out total elapsed start avg SRCS=""
+    local url probe_out total elapsed start med SRCS=""
     # Find sources that actually serve data (short single-stream checks).
     for url in $DOWN_URLS; do
         probe_out=$(curl -sSL -A "$UA" -o /dev/null -m 4 \
@@ -147,9 +139,10 @@ burst_down() {
     log "using sources:$SRCS"
 
     : > down.parts
+    : > conn.rtt
     start=$(date +%s)
-    ping -c "$PING_COUNT" -W 3 -q "$ptarget" > ping.down 2>/dev/null &
-    local PING_PID=$!
+    connect_sampler $((DUR + 2)) conn.rtt &
+    local CONN_PID=$!
     local i=1 src
     # Pin each worker to one alive source (cyclically) so concurrent
     # connections spread evenly across servers.
@@ -159,56 +152,88 @@ burst_down() {
         down_worker "$src" &
         i=$((i + 1))
     done
-    wait "$PING_PID" 2>/dev/null
+    wait "$CONN_PID" 2>/dev/null
     wait
     elapsed=$(( $(date +%s) - start )); [ "$elapsed" -ge 1 ] || elapsed=1
     total=$(awk '$2==200{s+=$1} END{print s+0}' down.parts)
-    avg=$(avg_rtt_from ping.down)
+    med=$(median_ms conn.rtt)
     # push bits/s (metric name is probe_burst_speed_bps)
-    echo "${avg:-0} $(awk "BEGIN{printf \"%.0f\", $total*8/$elapsed}")"
+    echo "${med:-0} $(awk "BEGIN{printf \"%.0f\", $total*8/$elapsed}")"
 }
 
-# burst_up <ping_target> -> echoes "avg_rtt speed_bps" (avg 0 if burst failed)
+# burst_up -> echoes "connect_rtt_ms speed_bps" (rtt 0 if burst failed)
 burst_up() {
-    local ptarget="$1" total elapsed start avg
+    local total elapsed start med
     mkdir -p "$TMP"
     [ -f "$TMP/payload.bin" ] || \
         dd if=/dev/urandom of="$TMP/payload.bin" bs=1M count="$UP_PAYLOAD_MB" 2>/dev/null
     [ -f "$TMP/payload.bin" ] || { log "cannot create upload payload"; echo "0 0"; return; }
 
     : > up.parts
+    : > conn.rtt
     start=$(date +%s)
-    ping -c "$PING_COUNT" -W 3 -q "$ptarget" > ping.up 2>/dev/null &
-    local PING_PID=$!
+    connect_sampler $((DUR + 2)) conn.rtt &
+    local CONN_PID=$!
     local i=1
     while [ "$i" -le "$UP_WORKERS" ]; do
         up_worker &
         i=$((i + 1))
     done
-    wait "$PING_PID" 2>/dev/null
+    wait "$CONN_PID" 2>/dev/null
     wait
     elapsed=$(( $(date +%s) - start )); [ "$elapsed" -ge 1 ] || elapsed=1
     total=$(awk '$2==200{s+=$1} END{print s+0}' up.parts)
-    avg=$(avg_rtt_from ping.up)
+    med=$(median_ms conn.rtt)
     # push bits/s (metric name is probe_burst_speed_bps)
-    echo "${avg:-0} $(awk "BEGIN{printf \"%.0f\", $total*8/$elapsed}")"
+    echo "${med:-0} $(awk "BEGIN{printf \"%.0f\", $total*8/$elapsed}")"
 }
 
-# --- phase 1: idle RTT ---------------------------------------------------
+# connect_rtt <count> -> median TCP-connect RTT (ms) to the probe target.
+# TCP, not ICMP: under load the ISP's PPP term proxy-answers echo requests
+# for arbitrary destination IPs (replies at ~0.6 ms, from in front of the
+# shaper), so ping deltas under-report bufferbloat and can even go
+# negative. A SYN->SYN-ACK has to be completed by the real host, past the
+# shaper where the queue delay actually lives. curl's time_connect is one
+# RTT (plus negligible server processing); the median of several samples
+# is the load reading.
+connect_rtt() {
+    local i=0 n="$1" t
+    while [ "$i" -lt "$n" ]; do
+        t=$(curl -k -sS -o /dev/null --connect-timeout 3 \
+            -w '%{time_connect}\n' "https://$INET_TARGET/" 2>/dev/null)
+        [ -n "$t" ] && [ "$t" != "0.000000" ] && echo "$t"
+        i=$((i + 1))
+        sleep 1
+    done | awk '{a[NR]=$1} END{if (NR==0) print 0; else if (NR%2) printf "%.3f\n", a[(NR+1)/2]*1000; else printf "%.3f\n", (a[NR/2]+a[NR/2+1])/2*1000}'
+}
 
-GW=$(current_gateway)
-IDLE_GW=$(ping_stats "$GW" 2>/dev/null)
-IDLE_INET=$(ping_stats "$INET_TARGET")
+# connect_sampler <duration_s> <outfile> -> appends connect RTTs (s) for
+# duration seconds; run in the background alongside the burst workers.
+connect_sampler() {
+    local end=$(( $(date +%s) + $1 )) t
+    while [ "$(date +%s)" -lt "$end" ]; do
+        t=$(curl -k -sS -o /dev/null --connect-timeout 3 \
+            -w '%{time_connect}\n' "https://$INET_TARGET/" 2>/dev/null)
+        [ -n "$t" ] && [ "$t" != "0.000000" ] && echo "$t" >>"$2"
+        sleep 1
+    done
+}
 
-IDLE_GW_AVG=$(echo "$IDLE_GW" | cut -d' ' -f1)
-IDLE_INET_AVG=$(echo "$IDLE_INET" | cut -d' ' -f1)
-IDLE_INET_LOSS=$(echo "$IDLE_INET" | cut -d' ' -f2)
+# median_ms <file of seconds> -> median in ms
+median_ms() {
+    awk '{a[NR]=$1} END{if (NR==0) print 0; else if (NR%2) printf "%.3f\n", a[(NR+1)/2]*1000; else printf "%.3f\n", (a[NR/2]+a[NR/2+1])/2*1000}' "$1" 2>/dev/null
+}
+
+
+# Idle RTT via TCP connect (see connect_rtt for why not ping).
+IDLE_INET_AVG=$(connect_rtt 5)
+IDLE_INET_LOSS=0
 [ -z "$IDLE_INET_AVG" ] && IDLE_INET_AVG=0
 
 # --- phase 2/3: bursts + loaded RTT --------------------------------------
 
-DOWN_INET=$(burst_down "$INET_TARGET")
-UP_INET=$(burst_up "$INET_TARGET")
+DOWN_INET=$(burst_down)
+UP_INET=$(burst_up)
 
 DOWN_INET_AVG=$(echo "$DOWN_INET" | cut -d' ' -f1)
 DOWN_SPEED=$(echo "$DOWN_INET" | cut -d' ' -f2)
@@ -234,7 +259,6 @@ fi
 
 TS=$(date +%s)000
 M="probe_idle_rtt_ms{target=\"$INET_TARGET\"} $IDLE_INET_AVG $TS
-probe_idle_rtt_ms{target=\"gateway\"} $IDLE_GW_AVG $TS
 probe_idle_loss_percent{target=\"$INET_TARGET\"} $IDLE_INET_LOSS $TS
 probe_burst_speed_bps{direction=\"down\"} ${DOWN_SPEED:-0} $TS
 probe_burst_speed_bps{direction=\"up\"} ${UP_SPEED:-0} $TS

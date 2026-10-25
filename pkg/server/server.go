@@ -118,6 +118,7 @@ func New(addr string, interval time.Duration, histCap int, vmURL, version string
 	app.Get("/api/history/orbi", s.handleAPIHistoryOrbi)
 	app.Get("/api/history/client", s.handleAPIClientHistory)
 	app.Get("/api/clients", s.handleAPIClients)
+	app.Get("/api/names", s.handleAPINames)
 	app.Get("/api/usage/window", s.handleAPIUsageWindow)
 	app.Get("/api/health", s.handleAPIHealth)
 	app.Get("/api/events", s.handleAPIEvents)
@@ -479,6 +480,14 @@ func (s *Server) handleAPIClients(c fiber.Ctx) error {
 	snap := s.clientStore.Snapshot()
 	c.Set("Content-Type", "application/json; charset=utf-8")
 	b, _ := json.Marshal(snap)
+	return c.Send(b)
+}
+
+// handleAPINames serves the persisted MAC -> friendly-name history so the
+// UI can name devices that are currently offline.
+func (s *Server) handleAPINames(c fiber.Ctx) error {
+	c.Set("Content-Type", "application/json; charset=utf-8")
+	b, _ := json.Marshal(s.clientStore.NamesSnapshot())
 	return c.Send(b)
 }
 
@@ -977,7 +986,10 @@ func (s *Server) handleAPIHistorySystem(c fiber.Ctx) error {
 	if err := fetchAvg(`100 * node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes`, &out.Mem); err != nil {
 		return c.Status(502).SendString(`{"error":"` + err.Error() + `"}`)
 	}
-	if err := fetchAvg(`collectd_conntrack`, &out.Conns); err != nil {
+	// collectd exports two conntrack series: the live count and a
+	// conntrack="max" series (the table limit). Averaging both halves the
+	// chart into nonsense (~131k on a 262144-max router); count only.
+	if err := fetchAvg(`collectd_conntrack{conntrack=""}`, &out.Conns); err != nil {
 		return c.Status(502).SendString(`{"error":"` + err.Error() + `"}`)
 	}
 	if err := fetchAvg(`collectd_ping`, &out.WANRTT); err != nil {
@@ -1005,11 +1017,22 @@ func (s *Server) handleAPIHistorySystem(c fiber.Ctx) error {
 		*out = pts[0].Val
 	}
 	// Latency added under load (bufferbloat history from the probe).
+	// A loaded RTT a hair below idle is jitter, not negative bloat — clamp.
 	if err := fetchAvg(`probe_bloat_ms{direction="down"}`, &out.BloatDn); err != nil {
 		return c.Status(502).SendString(`{"error":"` + err.Error() + `"}`)
 	}
 	if err := fetchAvg(`probe_bloat_ms{direction="up"}`, &out.BloatUp); err != nil {
 		return c.Status(502).SendString(`{"error":"` + err.Error() + `"}`)
+	}
+	for i, v := range out.BloatDn {
+		if v < 0 {
+			out.BloatDn[i] = 0
+		}
+	}
+	for i, v := range out.BloatUp {
+		if v < 0 {
+			out.BloatUp[i] = 0
+		}
 	}
 	const wanDev = `{device="pppoe-wan"}`
 	fetchScalar(`max(max_over_time((rate(node_network_receive_bytes_total`+wanDev+`[5m]))[24h:1m])) * 8 / 1e6`, &out.PeakDown)

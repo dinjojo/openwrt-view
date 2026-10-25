@@ -2169,6 +2169,39 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       } catch (e) { /* transient */ }
     }
 
+    // Persisted MAC -> friendly-name history (/api/names). Lets every
+    // panel name devices that are currently offline — a TV that has been
+    // off for hours, a phone that left — instead of showing raw MACs.
+    let nameMap = {};        // lowercase MAC -> friendly name
+    let nameMapAt = 0;
+    async function loadNames() {
+      try {
+        const r = await fetch(appURL('/api/names'));
+        if (!r.ok) return;
+        const m = await r.json();
+        if (m && typeof m === 'object') { nameMap = m; nameMapAt = Date.now(); }
+      } catch (e) { /* transient */ }
+    }
+    /** Friendliest known name for a raw MAC, or '' when unknown. */
+    function knownName(mac) {
+      if (!mac) return '';
+      return nameMap[String(mac).toLowerCase()] || '';
+    }
+    /** Replace known MACs inside a server-written message with names. */
+    function humanizeMACs(msg) {
+      let out = msg || '';
+      for (const [mac, nm] of Object.entries(nameMap)) {
+        if (out.toLowerCase().indexOf(mac) !== -1) {
+          out = out.replace(new RegExp(mac, 'gi'), nm);
+        }
+      }
+      // The server often writes "name (mac)"; after substitution that reads
+      // "name (name)" — collapse the redundant parenthetical.
+      return out.replace(/([^\n()]+) \(\1\)/g, '$1');
+    }
+    loadNames();
+    setInterval(loadNames, 600000);
+
     function renderClientKPIs() {
       const list  = clientsCache;
       const nOn   = list.filter(c => c.online).length;
@@ -2655,7 +2688,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       const mk = (list, pick, title) => {
         if (list.length === 0) return;
         clPlots.push({ u: makeChart(cd, W, H, t, list.map((s, i) => ({
-          label: s.name || s.mac,
+          label: s.name || knownName(s.mac) || s.mac,
           data:  pick(s),
           stroke: CL_COLORS[i % CL_COLORS.length],
           detail: () => openClientModal(s.mac, s.name || s.mac, s.ip || '', ''),
@@ -3241,8 +3274,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           const samples = tgs.map(tg => h(tg.name || 'wan') + ' ' + fmtNum(tg.samples));
           if (d.loaded && d.loaded.samples) samples.push('load probe ' + fmtNum(d.loaded.samples));
           html += trMore('lat', 'How to read this',
-            '<p class="note">Half your pings are faster than p50, only 5% are worse than p95. ' +
-            '&ldquo;Under load&rdquo; is the p95 ping during a full-rate download.' +
+            '<p class="note">RTT here is a TCP-connect measurement (SYN&rarr;SYN-ACK to the probe target) ' +
+            '&mdash; this ISP proxy-answers plain pings under load, which reads falsely fast. ' +
+            '&ldquo;Under load&rdquo; is the p95 connect RTT during a full-rate download.' +
             (samples.length ? '<br>Samples: <span class="num">' + samples.join(' · ') + '</span>' : '') + '</p>');
         }
         lat.innerHTML = html || '<p class="note">No latency history yet — numbers appear as VictoriaMetrics collects.</p>';
@@ -3309,7 +3343,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         const devs = (t.wifi_devices || []).slice().sort((x, y) => y.present_pct - x.present_pct);
         if (devs.length) {
           const devRow = (w, dim) => {
-            const nm = (w.name && w.name !== 'unknown') ? w.name : w.mac.slice(0, 8);
+            const nm = (w.name && w.name !== 'unknown') ? w.name : (knownName(w.mac) || w.mac.slice(0, 8));
             return '<tr' + (dim ? ' class="dim"' : '') + '><td>' + h(nm) + '<span class="band">' + h(w.band) + '</span></td>' +
               '<td' + (w.signal_p95 < 50 ? ' class="warn"' : '') + '>' + w.signal_p95.toFixed(0) + trU('%') + '</td>' +
               '<td>' + (w.link_p95 ? w.link_p95.toFixed(0) : '<span class="u">—</span>') + '</td>' +
@@ -4297,7 +4331,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         const isUntracked = /^00:00:00/.test(mac.toUpperCase());
         const nm = isUntracked ? 'WARP'
           : dev.name && dev.name.toLowerCase() !== 'unknown' ? dev.name
-          : (cl && cl.name) || (cl && cl.ip) || mac;
+          : (cl && cl.name) || knownName(mac) || (cl && cl.ip) || mac;
         return { mac, name: nm, gb: totals[mac], untracked: isUntracked };
       }).sort((a, b) => b.gb - a.gb);
       const total = rows.reduce((a, r) => a + r.gb, 0);
@@ -4396,7 +4430,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       }
       el.innerHTML = top.map(c => {
         const gb = gbOf(c);
-        const name = c.name || c.ip || c.mac;
+        const name = c.name || knownName(c.mac) || c.ip || c.mac;
         const icon = devIcon(c, 16);
         return '<button class="ov-top-row tr-client" tabindex="0" data-mac="' + h(c.mac) + '"' +
                ' data-name="' + h(name) + '" data-ip="' + h(c.ip) + '" data-vendor="' + h(c.vendor || '') + '"' +
@@ -4439,7 +4473,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           : '<span class="mk">' + lamp(sevState, 'sm') + '</span>';
         return '<div class="ev">' + mark +
           '<span class="when">' + when + '</span>' +
-          '<span>' + h(ev.msg) +
+          '<span>' + h(humanizeMACs(ev.msg)) +
             (ev.count > 1 ? ' <span class="num xs muted nowrap">&times;' + ev.count + '</span>' : '') +
           '</span>' +
         '</div>';
