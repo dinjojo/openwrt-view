@@ -793,7 +793,16 @@ func (s *Server) handleAPIUsageWindow(c fiber.Ctx) error {
 				a = &agg{}
 				aggs[sr.Labels["mac"]] = a
 			}
-			for _, v := range sr.Val {
+			for i, v := range sr.Val {
+				// The range starts left of the window so rate() has
+				// warmup samples at its left edge; only samples inside
+				// the window are usage. Integrating the warmup points
+				// would silently add 30 minutes of pre-window traffic
+				// to every window (and let a counter glitch outside
+				// the window bleed in).
+				if sr.TS[i] < start {
+					continue
+				}
 				if dir == "rx" {
 					a.rx += v * spec.stepSeconds()
 				} else {
@@ -823,7 +832,10 @@ func (s *Server) handleAPIUsageWindow(c fiber.Ctx) error {
 			continue
 		}
 		for _, sr := range series {
-			for _, v := range sr.Val {
+			for i, v := range sr.Val {
+				if sr.TS[i] < start { // skip the rate warmup, see clients loop
+					continue
+				}
 				*wq.dest += v * spec.stepSeconds()
 			}
 		}
