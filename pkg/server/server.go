@@ -755,7 +755,7 @@ type sysHistory struct {
 	BloatUp []float64 `json:"bloatup"` // added latency under upload load, ms
 
 	// WAN performance strip (last 24h), scalars for the summary cards.
-	PeakDown   float64 `json:"peakdown"`   // Mbit/s, busiest 5m window
+	PeakDown   float64 `json:"peakdown"`   // Mbit/s, busiest 30s window
 	PeakUp     float64 `json:"peakup"`     // Mbit/s
 	P95Down    float64 `json:"p95down"`    // Mbit/s, typical busy rate
 	P95Up      float64 `json:"p95up"`      // Mbit/s
@@ -1049,10 +1049,14 @@ func (s *Server) handleAPIHistorySystem(c fiber.Ctx) error {
 		}
 	}
 	const wanDev = `{device="pppoe-wan"}`
-	fetchScalar(`max(max_over_time((rate(node_network_receive_bytes_total`+wanDev+`[5m]))[24h:1m])) * 8 / 1e6`, &out.PeakDown)
-	fetchScalar(`max(max_over_time((rate(node_network_transmit_bytes_total`+wanDev+`[5m]))[24h:1m])) * 8 / 1e6`, &out.PeakUp)
-	fetchScalar(`quantile(0.95, quantile_over_time(0.95, (rate(node_network_receive_bytes_total`+wanDev+`[5m]))[24h:1m])) * 8 / 1e6`, &out.P95Down)
-	fetchScalar(`quantile(0.95, quantile_over_time(0.95, (rate(node_network_transmit_bytes_total`+wanDev+`[5m]))[24h:1m])) * 8 / 1e6`, &out.P95Up)
+	// True peak speed, not a 5-minute average: a 2-3 minute speedtest
+	// burst averaged over 5m windows reads ~70% of the real rate. 30 s
+	// rate windows over the 10 s collectd scrape track what the line
+	// actually carried at its fastest.
+	fetchScalar(`max(max_over_time((rate(node_network_receive_bytes_total`+wanDev+`[30s]))[24h:10s])) * 8 / 1e6`, &out.PeakDown)
+	fetchScalar(`max(max_over_time((rate(node_network_transmit_bytes_total`+wanDev+`[30s]))[24h:10s])) * 8 / 1e6`, &out.PeakUp)
+	fetchScalar(`quantile(0.95, quantile_over_time(0.95, (rate(node_network_receive_bytes_total`+wanDev+`[30s]))[24h:10s])) * 8 / 1e6`, &out.P95Down)
+	fetchScalar(`quantile(0.95, quantile_over_time(0.95, (rate(node_network_transmit_bytes_total`+wanDev+`[30s]))[24h:10s])) * 8 / 1e6`, &out.P95Up)
 	fetchScalar(`increase(node_network_receive_bytes_total`+wanDev+`[24h]) / 1e9`, &out.TotalDown)
 	fetchScalar(`increase(node_network_transmit_bytes_total`+wanDev+`[24h]) / 1e9`, &out.TotalUp)
 

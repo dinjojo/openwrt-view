@@ -2743,7 +2743,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
             '<div class="m-sub">' + (sub || '&nbsp;') + '</div>' +
           '</div>';
         strip.innerHTML =
-          mini('Peak download &middot; 24h', sysData.peakdown.toFixed(0) + ' Mbit/s', 'busiest 5-minute window' + pct, 'var(--dl)') +
+          mini('Peak download &middot; 24h', sysData.peakdown.toFixed(0) + ' Mbit/s', 'busiest 30-second window' + pct, 'var(--dl)') +
           mini('Peak upload &middot; 24h', sysData.peakup.toFixed(0) + ' Mbit/s', sysData.p95up.toFixed(0) + ' Mbit/s typical busy (p95)', 'var(--ul)') +
           mini('Typical busy rate &middot; p95', sysData.p95down.toFixed(0) + ' Mbit/s', 'download, exceeded 5% of the time', '') +
           mini('Traffic &middot; last 24h', sysData.totaldown.toFixed(1) + ' GB', sysData.totalup.toFixed(1) + ' GB uploaded', '');
