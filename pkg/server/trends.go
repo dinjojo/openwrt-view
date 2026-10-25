@@ -192,21 +192,32 @@ func durStr(sec int64) string {
 func (s *Server) addTrends(ctx context.Context, out *PercentileReport, w trendWindow) {
 	tr := TrendReport{Range: w.Label, Shaper: map[string]ShaperTrend{}, AQM: map[string]AQMTrend{}, Bloat: map[string][]BloatDay{}}
 
-	// ── Latency percentiles per ping target ──────────────────────────
+	// ── Latency percentiles per target ────────────────────────────────
+	// TCP-connect RTT first (honest under load on this ISP — the
+	// interceptor answers raw pings); fall back to ICMP for windows that
+	// predate the connect monitor.
+	rttMetric := `wan_connect_rtt_ms`
+	rttLabel := "target"
+	{
+		probe, _ := s.vmc.Query(ctx, fmt.Sprintf(`count_over_time(%s%s)`, rttMetric, w.sel()))
+		if len(probe) == 0 {
+			rttMetric, rttLabel = `collectd_ping`, "ping"
+		}
+	}
 	p99s, _ := s.vmc.Query(ctx,
-		fmt.Sprintf(`quantile_over_time(0.99, collectd_ping%s)`, w.sel()))
+		fmt.Sprintf(`quantile_over_time(0.99, %s%s)`, rttMetric, w.sel()))
 	p95s, _ := s.vmc.Query(ctx,
-		fmt.Sprintf(`quantile_over_time(0.95, collectd_ping%s)`, w.sel()))
+		fmt.Sprintf(`quantile_over_time(0.95, %s%s)`, rttMetric, w.sel()))
 	p50s, _ := s.vmc.Query(ctx,
-		fmt.Sprintf(`quantile_over_time(0.50, collectd_ping%s)`, w.sel()))
+		fmt.Sprintf(`quantile_over_time(0.50, %s%s)`, rttMetric, w.sel()))
 	counts, _ := s.vmc.Query(ctx,
-		fmt.Sprintf(`count_over_time(collectd_ping%s)`, w.sel()))
+		fmt.Sprintf(`count_over_time(%s%s)`, rttMetric, w.sel()))
 	// Normalise the label once: collectd leaves it empty for the default
 	// target, and every lookup must use the same key.
 	norm := func(pts []vm.Point) map[string]vm.Point {
 		m := make(map[string]vm.Point, len(pts))
 		for _, pt := range pts {
-			name := pt.Labels["ping"]
+			name := pt.Labels[rttLabel]
 			if name == "" {
 				name = "wan"
 			}
