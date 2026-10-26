@@ -373,7 +373,7 @@ func TestPollComputesRates(t *testing.T) {
 	}{
 		// A counter change divides the delta by the time it took (anchored
 		// at 10s before), and the rate then holds across idle polls until
-		// rateHold expires — nlbwmon only refreshes every 30s.
+		// rateHold expires — nlbwmon only refreshes every 5s.
 		{"traffic since last poll", "aa:bb:cc:00:00:01 1 11000 1 2500 1\n", 1000, 200, true, 0},
 		{"idle holds the recent rate", "aa:bb:cc:00:00:01 1 11000 1 2500 1\n", 1000, 200, true, 0},
 		{"idle past the hold window", "aa:bb:cc:00:00:01 1 11000 1 2500 1\n", 0, 0, false, -time.Minute},
@@ -558,11 +558,16 @@ func TestRunPushesCountersToVictoriaMetrics(t *testing.T) {
 	}
 
 	// Run has returned, so poll() can be driven directly; s.vmc stays set
-	// and each successful poll pushes once. A vanished device keeps being
-	// exported (frozen totals, zero conns) until it is evicted after 24h.
+	// and each poll pushes — but only once per vmEvery window, so the
+	// helper re-opens the gate (lastVM=zero) for the step it expects to
+	// import. A vanished device keeps being exported (frozen totals, zero
+	// conns) until it is evicted after 24h.
 	const phone, nas = "aa:bb:cc:00:00:01", "00:11:22:33:44:55"
 	push := func(step string) string {
 		t.Helper()
+		s.mu.Lock()
+		s.lastVM = time.Time{}
+		s.mu.Unlock()
 		if err := s.poll(); err != nil {
 			t.Fatalf("%s: poll: %v", step, err)
 		}
@@ -576,6 +581,15 @@ func TestRunPushesCountersToVictoriaMetrics(t *testing.T) {
 	}
 	env.set("nlbw", phone+" 7 1000 1 500 1\n"+nas+" 2 300 1 200 1\n", 0)
 	push("both present")
+	// The vmEvery gate: a poll inside the window pushes nothing.
+	if err := s.poll(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case b := <-bodies:
+		t.Fatalf("gated poll still imported: %s", strings.TrimSpace(b)[:80])
+	case <-time.After(150 * time.Millisecond):
+	}
 	env.set("nlbw", nas+" 2 300 1 200 1\n", 0)
 	for _, st := range []struct {
 		name      string
@@ -674,7 +688,7 @@ func TestPollEvictsLongAbsentClients(t *testing.T) {
 	}
 }
 
-func TestPollReadsNeighbourTableOncePerPoll(t *testing.T) {
+func TestPollGatesNeighbourTableReads(t *testing.T) {
 	env := newFakeEnv(t)
 	env.set("nlbw", nlbwOut, 0)
 	env.set("neigh", neighOut, 0)
@@ -683,23 +697,40 @@ func TestPollReadsNeighbourTableOncePerPoll(t *testing.T) {
 	s := newTestStore(t)
 	s.namesAt = time.Now()
 
-	for poll := 1; poll <= 3; poll++ {
-		if err := s.poll(); err != nil {
-			t.Fatal(err)
-		}
+	count := func() int {
+		t.Helper()
 		b, err := os.ReadFile(calls)
 		if err != nil {
 			t.Fatal(err)
 		}
-		lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-		if len(lines) != poll {
-			t.Fatalf("after %d polls of 3 clients: %d ip invocations %q, want %d", poll, len(lines), lines, poll)
+		return len(strings.Split(strings.TrimSpace(string(b)), "\n"))
+	}
+	if err := s.poll(); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("first poll: %d ip invocations, want 1", n)
+	}
+	// Two more polls inside the neighEvery window reuse the cached dump.
+	for poll := 2; poll <= 3; poll++ {
+		if err := s.poll(); err != nil {
+			t.Fatal(err)
 		}
-		if lines[poll-1] != "-s neigh show" {
-			t.Errorf("ip invoked with %q, want \"-s neigh show\"", lines[poll-1])
+		if n := count(); n != 1 {
+			t.Fatalf("after %d polls: %d ip invocations, want 1 (cache should hold)", poll, n)
 		}
 	}
-	// The single read still drives both IP resolution and online status.
+	// Age the cache out: the next poll reads the table once more.
+	s.mu.Lock()
+	s.neighAt = s.neighAt.Add(-neighEvery)
+	s.mu.Unlock()
+	if err := s.poll(); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 2 {
+		t.Fatalf("poll after cache expiry: %d ip invocations, want 2", n)
+	}
+	// The cached read still drives both IP resolution and online status.
 	snap := s.Snapshot()
 	if snap[0].IP != "192.168.1.11" || snap[0].Online || snap[1].IP != "192.168.1.10" || !snap[1].Online {
 		t.Errorf("Snapshot() IP/online from shared neigh read wrong: %+v", snap)

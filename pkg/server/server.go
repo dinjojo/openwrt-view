@@ -85,7 +85,7 @@ func New(addr string, interval time.Duration, histCap int, vmURL, version string
 		clients:      make(map[chan []byte]struct{}),
 		pollInterval: interval,
 		history:      history.NewHistoryStore(histCap),
-		clientStore:  clients.New(30*time.Second, vmURL),
+		clientStore:  clients.New(5*time.Second, vmURL), // nlbwmon fallback cadence; the eBPF source overrides to 1s in SetEBPF
 		orbi:         orb,
 		loc:          time.Local,
 		version:      version,

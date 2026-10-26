@@ -63,8 +63,14 @@ type nlbwAnchor struct {
 }
 
 // rateHold is how long a computed rate stays on display after the counters
-// stop moving. Must comfortably exceed nlbwmon's refresh_interval (30s).
-const rateHold = 45 * time.Second
+// stop moving. Must comfortably exceed nlbwmon's refresh_interval (5s here;
+// uci nlbwmon.@nlbwmon[0].refresh_interval).
+const rateHold = 15 * time.Second
+
+// vmEvery is how often poll() pushes cumulative counters into
+// VictoriaMetrics. Rates come from every poll, but history samples do not
+// need the full 5s resolution and would grow the series 6x for nothing.
+const vmEvery = 30 * time.Second
 
 // Store keeps the latest client snapshot and runs the poller.
 type Store struct {
@@ -84,12 +90,16 @@ type Store struct {
 	carryAt       time.Time      // last carry persist
 	connsByIP     map[string]int // conntrack entries per IP (eBPF path, refreshed every connsEvery)
 	connsAt       time.Time
+	neighOnline   map[string]bool   // MAC -> reachable (refreshed every neighEvery)
+	neighIPs      map[string]string // MAC -> IP (same refresh)
+	neighAt       time.Time         // gate for the `ip neigh` exec
 	leasesAt      time.Time
 	leases        map[string]string // MAC -> hostname (refreshed every 10 min)
 	staticHosts   map[string]string // MAC -> static lease name from /etc/config/dhcp
 	hosts         map[string]string // IP -> hostname from /etc/hosts
 	vendors       map[string]string // OUI -> vendor name (cached + persisted)
 	namesAt       time.Time         // gate for the slow name-resolution cycle
+	lastVM        time.Time         // gate for the VictoriaMetrics history push
 	namesPath     string            // persisted vendor cache
 	namesHist     map[string]string // MAC -> last known friendly name (persisted; keeps offline devices named)
 	namesHistPath string            // persisted friendly-name history
@@ -111,6 +121,11 @@ func (s *Store) SetEBPF(c *ebpfacct.Collector) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ebpf = c
+	// The kernel map read is a walk of an LRU hash — microseconds, no
+	// daemon floor like nlbwmon's refresh_interval — so the poller can
+	// run at the same 1s cadence as the WAN counters panel and per-device
+	// rates move just as live. (SetEBPF runs before Run starts the ticker.)
+	s.interval = time.Second
 	if s.statePath == "" {
 		s.statePath = "/opt/monitoring/ebpf-carry.json"
 	}
@@ -460,7 +475,7 @@ func (s *Store) poll() error {
 	now := time.Now()
 
 	s.refreshNames()
-	online, ips := readNeigh()
+	online, ips := s.cachedNeigh(now)
 
 	s.mu.Lock()
 	s.havePolled = true
@@ -511,12 +526,12 @@ func (s *Store) poll() error {
 		}
 
 		// Rate from the last counter CHANGE, not the last poll: nlbwmon
-		// refreshes its counters every refresh_interval (30s), so with a
-		// 1s poll loop the raw prev-sample difference is a spike-train —
-		// 29 zeros then one huge burst — and every panel reading it
-		// (topology links, client table) shows ~0. Dividing by the time
-		// the counters actually took to move gives a true average rate,
-		// held for rateHold so displays stay steady between refreshes.
+		// refreshes its counters every refresh_interval (5s here), so a
+		// poll loop faster than that sees idle polls in between — and the
+		// raw prev-sample difference would be a spike-train with big
+		// zeroes. Dividing by the time the counters actually took to move
+		// gives a true average rate, held for rateHold so displays stay
+		// steady between refreshes.
 		c.RxRate, c.TxRate = 0, 0
 		a := s.anchor[r.mac]
 		switch {
@@ -578,7 +593,8 @@ func (s *Store) poll() error {
 	}
 	s.mu.Unlock() // release before the (potentially slow) VM import
 
-	if s.vmc != nil {
+	if s.vmc != nil && now.Sub(s.lastVM) >= vmEvery {
+		s.lastVM = now
 		s.pushVM(now)
 	}
 	return nil
@@ -898,6 +914,20 @@ func macSuffix(mac string) string {
 		return mac
 	}
 	return strings.Join(f[len(f)-2:], "")
+}
+
+// neighEvery is how often poll() re-runs `ip neigh show`. The dump feeds
+// Online state and MAC->IP resolution, neither of which changes
+// second-to-second; at the 1s eBPF poll cadence re-running it per poll
+// would fork a process for nothing. Poll-goroutine only, no locking.
+const neighEvery = 5 * time.Second
+
+func (s *Store) cachedNeigh(now time.Time) (online map[string]bool, ips map[string]string) {
+	if s.neighAt.IsZero() || now.Sub(s.neighAt) >= neighEvery {
+		s.neighOnline, s.neighIPs = readNeigh()
+		s.neighAt = now
+	}
+	return s.neighOnline, s.neighIPs
 }
 
 // readNeigh runs `ip neigh show` once and returns both the MACs the kernel
