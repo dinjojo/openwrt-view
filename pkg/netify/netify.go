@@ -70,13 +70,22 @@ type Snapshot struct {
 
 // AppRow is one application's totals with its per-device breakdown.
 type AppRow struct {
-	Tag    string      `json:"tag"`    // netify tag, e.g. "netify.netflix"
-	Name   string      `json:"name"`   // display name, e.g. "Netflix"
-	Host   string      `json:"host"`   // most-seen SNI hostname for it
-	Down   int64       `json:"down"`   // bytes to clients
-	Up     int64       `json:"up"`     // bytes from clients
-	Total  int64       `json:"total"`  // down + up
-	Device []DeviceRow `json:"device"` // sorted by total, descending
+	Tag    string      `json:"tag"`             // netify tag, e.g. "netify.netflix"
+	Name   string      `json:"name"`            // display name, e.g. "Netflix"
+	Host   string      `json:"host"`            // most-seen SNI hostname for it
+	Down   int64       `json:"down"`            // bytes to clients
+	Up     int64       `json:"up"`              // bytes from clients
+	Total  int64       `json:"total"`           // down + up
+	Trend  *Trend      `json:"trend,omitempty"` // per-minute series for the sparkline
+	Device []DeviceRow `json:"device"`          // sorted by total, descending
+}
+
+// Trend is an app's recent traffic: parallel down/up series, oldest
+// first, one value per BucketSec.
+type Trend struct {
+	BucketSec int     `json:"bucket_sec"`
+	Down      []int64 `json:"down"`
+	Up        []int64 `json:"up"`
 }
 
 // DeviceRow is one device's share of one app.
@@ -95,8 +104,9 @@ type Collector struct {
 	defApps   map[int64]string // application id -> tag (definitions event)
 	flows     map[string]*flow
 	agg       map[aggKey]*aggEntry
-	hostOf    map[string]string // app tag -> most-seen hostname
-	unknown   int64             // bytes without an app identity yet
+	hostOf    map[string]string     // app tag -> most-seen hostname
+	series    map[string]*appSeries // app tag -> per-minute traffic ring
+	unknown   int64                 // bytes without an app identity yet
 	started   time.Time
 	connected bool
 }
@@ -109,6 +119,7 @@ func New(sockPath string) *Collector {
 		flows:    map[string]*flow{},
 		agg:      map[aggKey]*aggEntry{},
 		hostOf:   map[string]string{},
+		series:   map[string]*appSeries{},
 		started:  time.Now(),
 	}
 }
@@ -357,6 +368,54 @@ func (c *Collector) addAttribute(f *flow, down, up int64) {
 	if h := hostBase(f.hostName); h != "" {
 		c.hostOf[f.appTag] = h
 	}
+	c.addSeriesAt(f.appTag, down, up, time.Now().Unix()/seriesBucketSecs)
+}
+
+// ── Per-app trend series ──────────────────────────────────────────────
+// A fixed ring of one-minute buckets per app tag: cheap to maintain,
+// small enough to keep 12h in memory while the UI is shown the last 2h.
+const (
+	seriesBucketSecs int64 = 60
+	seriesKeep             = 720 // minutes retained in memory (12h)
+	seriesEmit             = 120 // minutes served to the UI (2h)
+)
+
+type appSeries struct {
+	base int64   // absolute bucket index of slot 0
+	down []int64 // ring of seriesKeep slots
+	up   []int64
+}
+
+// addSeriesAt credits a delta to the bucket at absolute index bucket,
+// advancing the ring (zeroing evicted slots) when time has moved on.
+func (c *Collector) addSeriesAt(tag string, down, up int64, bucket int64) {
+	s := c.series[tag]
+	if s == nil {
+		// The current bucket is the ring's last slot, so the emitted
+		// tail (the newest seriesEmit slots) is live from the first byte.
+		s = &appSeries{base: bucket - (seriesKeep - 1), down: make([]int64, seriesKeep), up: make([]int64, seriesKeep)}
+		c.series[tag] = s
+	}
+	if bucket >= s.base+seriesKeep { // ring full: slide forward
+		shift := bucket - (s.base + seriesKeep) + 1
+		if shift >= seriesKeep {
+			clear(s.down)
+			clear(s.up)
+			s.base = bucket
+		} else {
+			copy(s.down, s.down[shift:])
+			copy(s.up, s.up[shift:])
+			clear(s.down[seriesKeep-shift:])
+			clear(s.up[seriesKeep-shift:])
+			s.base += shift
+		}
+	}
+	if bucket < s.base { // ancient, already-evicted bucket: fold into the oldest slot
+		bucket = s.base
+	}
+	pos := bucket - s.base
+	s.down[pos] += down
+	s.up[pos] += up
 }
 
 // idleFlow is how long a flow may go without updates before its table
@@ -418,6 +477,16 @@ func (c *Collector) Snapshot() Snapshot {
 	snap := Snapshot{Started: c.started, Flows: len(c.flows)}
 	for tag, a := range byApp {
 		row := AppRow{Tag: tag, Name: appLabel(tag), Host: c.hostOf[tag], Down: a.down, Up: a.up, Total: a.down + a.up}
+		if s := c.series[tag]; s != nil {
+			n := seriesKeep
+			if seriesEmit < n {
+				n = seriesEmit
+			}
+			trend := Trend{BucketSec: int(seriesBucketSecs), Down: make([]int64, n), Up: make([]int64, n)}
+			copy(trend.Down, s.down[seriesKeep-n:])
+			copy(trend.Up, s.up[seriesKeep-n:])
+			row.Trend = &trend
+		}
 		for mac, e := range a.dev {
 			row.Device = append(row.Device, DeviceRow{MAC: mac, Down: e.down, Up: e.up, Total: e.down + e.up})
 		}

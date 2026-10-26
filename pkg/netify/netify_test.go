@@ -151,3 +151,76 @@ func TestAppLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestTrendSeriesRingAndSnapshot(t *testing.T) {
+	c := New("/nonexistent.sock")
+
+	// Bytes credited through the real path land in both the aggregate and
+	// the trend ring.
+	c.mu.Lock()
+	f := &flow{appTag: "netify.youtube", mac: "aa:bb:cc:dd:ee:ff"}
+	c.addAttribute(f, 700, 100)
+	c.addAttribute(f, 300, 50) // same bucket accumulates
+	c.addAttribute(&flow{appTag: "netify.ntp", mac: "aa:bb:cc:dd:ee:ff"}, 10, 10)
+	c.mu.Unlock()
+
+	// Ring slides forward; a credit a few buckets older than the new
+	// frontier survives in the ring, though it falls outside the
+	// 120-minute window the UI is shown.
+	now := time.Now().Unix() / seriesBucketSecs
+	future := now + seriesKeep - 10
+	c.mu.Lock()
+	c.addSeriesAt("netify.youtube", 1, 2, future)
+	s := c.series["netify.youtube"]
+	if s.base != future-seriesKeep+1 {
+		t.Errorf("ring base = %d, want %d", s.base, future-seriesKeep+1)
+	}
+	var ringDown, ringUp int64
+	for i := range s.down {
+		ringDown += s.down[i]
+		ringUp += s.up[i]
+	}
+	c.mu.Unlock()
+	if ringDown != 1001 || ringUp != 152 { // 700+300+1 down, 100+50+2 up
+		t.Errorf("full-ring sums = %d/%d, want 1001/152", ringDown, ringUp)
+	}
+
+	snap := c.Snapshot()
+	var yt *AppRow
+	for i := range snap.Apps {
+		if snap.Apps[i].Tag == "netify.youtube" {
+			yt = &snap.Apps[i]
+		}
+	}
+	if yt == nil || yt.Trend == nil {
+		t.Fatalf("youtube row/trend missing: %+v", yt)
+	}
+	if yt.Trend.BucketSec != int(seriesBucketSecs) {
+		t.Errorf("bucket_sec = %d, want %d", yt.Trend.BucketSec, seriesBucketSecs)
+	}
+	if len(yt.Trend.Down) != seriesEmit || len(yt.Trend.Up) != seriesEmit {
+		t.Fatalf("emitted series length = %d/%d, want %d each", len(yt.Trend.Down), len(yt.Trend.Up), seriesEmit)
+	}
+	var sumDown, sumUp int64
+	for _, v := range yt.Trend.Down {
+		sumDown += v
+	}
+	for _, v := range yt.Trend.Up {
+		sumUp += v
+	}
+	if sumDown != 1 || sumUp != 2 {
+		// The earlier credits are 710 minutes old — inside the ring but
+		// outside the emitted 2h tail; only the frontier credit shows.
+		t.Errorf("emitted sums = %d/%d, want 1/2", sumDown, sumUp)
+	}
+	// No slide happened for ntp, so its credit is still the newest bucket.
+	var ntp *AppRow
+	for i := range snap.Apps {
+		if snap.Apps[i].Tag == "netify.ntp" {
+			ntp = &snap.Apps[i]
+		}
+	}
+	if ntp == nil || ntp.Trend == nil || ntp.Trend.Down[len(ntp.Trend.Down)-1] != 10 {
+		t.Errorf("ntp trend missing or last bucket wrong: %+v", ntp)
+	}
+}

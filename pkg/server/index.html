@@ -435,6 +435,8 @@
     .ro-unit { font-family: var(--f-num); font-size: var(--t-xs); color: var(--ink-2); }
     .ro-lab { grid-column: 1 / -1; font-size: var(--t-sm); color: var(--ink-2); margin-top: 2px; display: flex; align-items: center; gap: 6px; }
     .swatch { display: inline-block; width: 14px; height: 2px; vertical-align: middle; background: currentColor; }
+    .app-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 7px;
+      vertical-align: -1px; box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 25%, transparent); }
     .ro-dl .ro-val { color: var(--accent); }
     .ro-ul .ro-val { color: var(--ink); }
     .ro-foot { font-size: var(--t-sm); color: var(--ink-2); display: flex; flex-direction: column; gap: 6px; margin-top: auto; }
@@ -1037,16 +1039,16 @@
           <h2 class="h2">Applications <span class="sub" id="cl-apps-sub"></span></h2>
         </div>
         <div class="overflow-x-auto">
-          <table class="tbl fixed" style="min-width:760px">
+          <table class="tbl fixed" style="min-width:920px">
             <colgroup>
-              <col /><col style="width:110px" /><col style="width:110px" /><col style="width:170px" /><col />
+              <col /><col style="width:150px" /><col style="width:110px" /><col style="width:110px" /><col style="width:170px" /><col />
             </colgroup>
             <thead>
-              <tr><th>Application</th><th class="r">↓ total</th><th class="r">↑ total</th>
+              <tr><th>Application</th><th>trend <span class="sub">2h</span></th><th class="r">↓ total</th><th class="r">↑ total</th>
                 <th class="r">share</th><th>Devices</th></tr>
             </thead>
             <tbody id="cl-apps-tbody">
-              <tr><td colspan="5" class="empty">Loading applications…</td></tr>
+              <tr><td colspan="6" class="empty">Loading applications…</td></tr>
             </tbody>
           </table>
         </div>
@@ -2247,6 +2249,58 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     let appsCache = null, appsAt = 0;   // null = endpoint unavailable or not yet fetched
     const normMac = s => String(s || '').toLowerCase();
 
+    // Brand colours for well-known apps (matched against the netify tag),
+    // then a deterministic palette so every other app still gets a stable
+    // hue — the Ubiquiti-style colourful application list.
+    const APP_BRANDS = [
+      ['netflix', '#e50914'], ['youtube', '#ff0000'], ['googlevideo', '#ff0000'],
+      ['whatsapp', '#25d366'], ['instagram', '#e1306c'], ['facebook', '#1877f2'],
+      ['messenger', '#0084ff'], ['microsoft', '#00a4ef'], ['onedrive', '#0364b8'],
+      ['teams', '#6264a7'], ['github', '#a371f7'], ['gitlab', '#fc6d26'],
+      ['google', '#4285f4'], ['gmail', '#ea4335'], ['amazon', '#ff9900'],
+      ['cloudflare', '#f48120'], ['akamai', '#0096ca'], ['apple', '#a2aaad'],
+      ['icloud', '#3693f3'], ['ubuntu', '#e95420'], ['telegram', '#26a5e4'],
+      ['twitter', '#1da1f2'], ['reddit', '#ff4500'], ['steam', '#66c0f4'],
+      ['twitch', '#9146ff'], ['spotify', '#1db954'], ['discord', '#5865f2'],
+      ['signal', '#3a76f0'], ['tiktok', '#fe2c55'],
+      ['tunnel', '#f48120'], ['argotunnel', '#f48120'], ['wireguard', '#88171a'],
+      ['ntp', '#f59e0b'], ['dns', '#38bdf8'],
+    ];
+    const APP_PALETTE = ['#0ea5e9', '#8b5cf6', '#f97316', '#10b981', '#ef4444',
+      '#eab308', '#ec4899', '#14b8a6', '#6366f1', '#84cc16', '#f43f5e', '#06b6d4'];
+    function appColor(tag) {
+      const t = String(tag || '').toLowerCase();
+      if (!t || t === 'unknown') return '#959084';
+      for (const [key, col] of APP_BRANDS) if (t.includes(key)) return col;
+      let hash = 0;
+      for (let i = 0; i < t.length; i++) hash = (hash * 31 + t.charCodeAt(i)) >>> 0;
+      return APP_PALETTE[hash % APP_PALETTE.length];
+    }
+
+    /** Tiny inline-SVG trend: download in the download colour, upload in
+     *  the upload colour, normalised together so shape beats scale. */
+    function sparkline(trend, w, hgt) {
+      if (!trend || !trend.down || !trend.down.length) return '';
+      const down = trend.down, up = trend.up || [];
+      const max = Math.max(...down, ...up, 1e-9);
+      const path = (arr, col, fill) => {
+        if (!arr.length) return '';
+        const step = w / Math.max(1, arr.length - 1);
+        let d = '', peak = false;
+        arr.forEach((v, i) => {
+          const x = (i * step).toFixed(1), y = (hgt - 1 - (v / max) * (hgt - 2)).toFixed(1);
+          d += (i ? 'L' : 'M') + x + ',' + y;
+          if (v > 0) peak = true;
+        });
+        if (!peak) return '';
+        let out = '<path d="' + d + '" fill="none" stroke="' + col + '" stroke-width="1.5" stroke-linejoin="round"/>';
+        if (fill) out += '<path d="' + d + 'L' + w + ',' + hgt + 'L0,' + hgt + 'Z" fill="' + fill + '" stroke="none"/>';
+        return out;
+      };
+      return '<svg width="' + w + '" height="' + hgt + '" viewBox="0 0 ' + w + ' ' + hgt + '" aria-hidden="true">' +
+        path(down, 'var(--dl)', 'rgba(9,105,218,0.18)') + path(up, 'var(--ul)', '') + '</svg>';
+    }
+
     async function fetchApps() {
       try {
         const r = await fetch(appURL('/api/apps'));
@@ -2283,6 +2337,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         'per-device traffic since ' + new Date(appsCache.started).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
         ' · ' + appsCache.flows + ' flows live';
       body.innerHTML = apps.slice(0, 12).map(a => {
+        const col = appColor(a.tag);
         const devs = (a.device || []).slice(0, 3).map(d =>
           h(d.name || d.mac) + ' <span class="num muted xs">' + fmtBytes(d.total || 0) + '</span>'
         ).join('<span class="sep">·</span>');
@@ -2290,11 +2345,13 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           ? ' <span class="xs muted">+' + (a.device.length - 3) + ' more</span>' : '';
         const share = Math.max(2, (a.total || 0) / grand * 100).toFixed(1);
         return '<tr>' +
-          '<td><span class="strong">' + h(a.name) + '</span>' +
+          '<td><span class="app-dot" style="background:' + col + '"></span>' +
+            '<span class="strong">' + h(a.name) + '</span>' +
             (a.host ? '<div class="xs muted truncate" style="max-width:260px">' + h(a.host) + '</div>' : '') + '</td>' +
+          '<td>' + sparkline(a.trend, 130, 30) + '</td>' +
           '<td class="r num dl">' + fmtBytes(a.down || 0) + '</td>' +
           '<td class="r num">' + fmtBytes(a.up || 0) + '</td>' +
-          '<td class="r"><div class="bar" style="margin:0"><i style="width:' + share + '%;background:var(--dl)"></i></div></td>' +
+          '<td class="r"><div class="bar" style="margin:0"><i style="width:' + share + '%;background:' + col + '"></i></div></td>' +
           '<td class="sm">' + (devs || '<span class="muted">–</span>') + more + '</td>' +
         '</tr>';
       }).join('');
@@ -2319,7 +2376,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       el.innerHTML = head +
         '<div class="stack">' + mine.map(({ a, d }) =>
           '<div class="ubar">' +
-            '<span style="grid-row:span 2" class="strong truncate">' + h(a.name) + '</span>' +
+            '<span style="grid-row:span 2" class="strong truncate"><span class="app-dot" style="background:' +
+              appColor(a.tag) + '"></span>' + h(a.name) + '</span>' +
             bar(d.down || 0, 'var(--dl)') + '<span class="num right">' + fmtBytes(d.down || 0) + '</span>' +
             bar(d.up || 0, 'var(--ul)') + '<span class="num right muted">' + fmtBytes(d.up || 0) + '</span>' +
           '</div>').join('') + '</div>' +

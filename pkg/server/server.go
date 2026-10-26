@@ -1311,20 +1311,21 @@ func (s *Server) handleAPIApps(c fiber.Ctx) error {
 		Name string `json:"name"`
 	}
 	type appOut struct {
-		Tag    string   `json:"tag"`
-		Name   string   `json:"name"`
-		Host   string   `json:"host"`
-		Down   int64    `json:"down"`
-		Up     int64    `json:"up"`
-		Total  int64    `json:"total"`
-		Device []devOut `json:"device"`
+		Tag    string        `json:"tag"`
+		Name   string        `json:"name"`
+		Host   string        `json:"host"`
+		Down   int64         `json:"down"`
+		Up     int64         `json:"up"`
+		Total  int64         `json:"total"`
+		Trend  *netify.Trend `json:"trend,omitempty"`
+		Device []devOut      `json:"device"`
 	}
 	out := struct {
 		netify.Snapshot
 		Apps []appOut `json:"apps"`
 	}{Snapshot: netify.Snapshot{Started: snap.Started, Flows: snap.Flows, Unknown: snap.Unknown}}
 	for _, a := range snap.Apps {
-		o := appOut{Tag: a.Tag, Name: a.Name, Host: a.Host, Down: a.Down, Up: a.Up, Total: a.Total}
+		o := appOut{Tag: a.Tag, Name: a.Name, Host: a.Host, Down: a.Down, Up: a.Up, Total: a.Total, Trend: a.Trend}
 		for _, d := range a.Device {
 			o.Device = append(o.Device, devOut{DeviceRow: d, Name: s.clientStore.Name(d.MAC)})
 		}
