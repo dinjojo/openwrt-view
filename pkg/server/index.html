@@ -1038,17 +1038,18 @@
         <div class="sect-head">
           <h2 class="h2">Applications <span class="sub" id="cl-apps-sub"></span></h2>
         </div>
+        <div id="cl-apps-chart" class="charts"></div>
         <div class="overflow-x-auto">
-          <table class="tbl fixed" style="min-width:920px">
+          <table class="tbl fixed" style="min-width:780px">
             <colgroup>
-              <col /><col style="width:150px" /><col style="width:110px" /><col style="width:110px" /><col style="width:170px" /><col />
+              <col /><col style="width:110px" /><col style="width:110px" /><col style="width:170px" /><col />
             </colgroup>
             <thead>
-              <tr><th>Application</th><th>trend <span class="sub">2h</span></th><th class="r">↓ total</th><th class="r">↑ total</th>
+              <tr><th>Application</th><th class="r">↓ total</th><th class="r">↑ total</th>
                 <th class="r">share</th><th>Devices</th></tr>
             </thead>
             <tbody id="cl-apps-tbody">
-              <tr><td colspan="6" class="empty">Loading applications…</td></tr>
+              <tr><td colspan="5" class="empty">Loading applications…</td></tr>
             </tbody>
           </table>
         </div>
@@ -2277,28 +2278,38 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       return APP_PALETTE[hash % APP_PALETTE.length];
     }
 
-    /** Tiny inline-SVG trend: download in the download colour, upload in
-     *  the upload colour, normalised together so shape beats scale. */
-    function sparkline(trend, w, hgt) {
-      if (!trend || !trend.down || !trend.down.length) return '';
-      const down = trend.down, up = trend.up || [];
-      const max = Math.max(...down, ...up, 1e-9);
-      const path = (arr, col, fill) => {
-        if (!arr.length) return '';
-        const step = w / Math.max(1, arr.length - 1);
-        let d = '', peak = false;
-        arr.forEach((v, i) => {
-          const x = (i * step).toFixed(1), y = (hgt - 1 - (v / max) * (hgt - 2)).toFixed(1);
-          d += (i ? 'L' : 'M') + x + ',' + y;
-          if (v > 0) peak = true;
-        });
-        if (!peak) return '';
-        let out = '<path d="' + d + '" fill="none" stroke="' + col + '" stroke-width="1.5" stroke-linejoin="round"/>';
-        if (fill) out += '<path d="' + d + 'L' + w + ',' + hgt + 'L0,' + hgt + 'Z" fill="' + fill + '" stroke="none"/>';
-        return out;
-      };
-      return '<svg width="' + w + '" height="' + hgt + '" viewBox="0 0 ' + w + ' ' + hgt + '" aria-hidden="true">' +
-        path(down, 'var(--dl)', 'rgba(9,105,218,0.18)') + path(up, 'var(--ul)', '') + '</svg>';
+    /** Per-application traffic chart: the 2h trend of each of the top
+     *  apps, in the dashboard's own tape-chart language, coloured to
+     *  match the table's dots (makeChart renders the legend). */
+    let appsPlots = [];
+    function hexA(hex, a) {
+      const m = /^#([0-9a-f]{6})$/i.exec(hex);
+      if (!m) return hex;
+      const n = parseInt(m[1], 16);
+      return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+    }
+    function renderAppsChart(apps) {
+      const cd = document.getElementById('cl-apps-chart');
+      if (!cd) return;
+      appsPlots.forEach(p => { try { p.destroy(); } catch (_) {} });
+      appsPlots = [];
+      cd.innerHTML = '';
+      const top = apps.filter(a => a.trend && a.trend.down && a.trend.down.length).slice(0, 6);
+      if (!top.length) return;
+      const t0 = top[0].trend, n = t0.down.length, bsec = t0.bucket_sec || 60;
+      // Buckets are absolute minute indices; the newest is the last slot.
+      const end = Math.floor(Date.now() / 1000 / bsec);
+      const times = Array.from({ length: n }, (_, i) => (end - n + 1 + i) * bsec);
+      const W = Math.max(200, cd.clientWidth - 4), H = 170;
+      appsPlots.push(makeChart(cd, W, H, times, top.map(a => {
+        const col = appColor(a.tag);
+        return {
+          label: a.name,
+          data: a.trend.down.map((v, i) => v + ((a.trend.up || [])[i] || 0)),
+          stroke: col,
+          fill: hexA(col, 0.12),
+        };
+      }), 'Traffic by application (2h)', v => fmtBytes(v) + '/min', 'cl-x'));
     }
 
     async function fetchApps() {
@@ -2320,6 +2331,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     }
 
     function renderApps() {
+      renderAppsChart(appsCache && appsCache.apps || []);
       renderAppsTable();
       if (clModal.mac) renderClientApps();
     }
@@ -2348,7 +2360,6 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           '<td><span class="app-dot" style="background:' + col + '"></span>' +
             '<span class="strong">' + h(a.name) + '</span>' +
             (a.host ? '<div class="xs muted truncate" style="max-width:260px">' + h(a.host) + '</div>' : '') + '</td>' +
-          '<td>' + sparkline(a.trend, 130, 30) + '</td>' +
           '<td class="r num dl">' + fmtBytes(a.down || 0) + '</td>' +
           '<td class="r num">' + fmtBytes(a.up || 0) + '</td>' +
           '<td class="r"><div class="bar" style="margin:0"><i style="width:' + share + '%;background:' + col + '"></i></div></td>' +
