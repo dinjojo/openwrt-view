@@ -2,63 +2,51 @@ package agh
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 )
 
-// fakeAGH mimics the AdGuard Home API surface the poller uses: cookie
-// login, status, stats (0.107.79 single-key-object top lists), stats
-// config and the legacy stats info endpoint.
+// fakeAGH mimics the AdGuard Home API surface the poller uses: Basic
+// auth on every request, status, stats (modern array top lists) and
+// stats info.
 type fakeAGH struct {
-	srv         *httptest.Server
-	authed      atomic.Bool
-	failAuth    atomic.Bool  // stats answers 403 until the next login
-	rejectLogin atomic.Bool  // login always answers 403 (wrong password)
-	statusBody  atomic.Value // string
-	statsBody   string
-	infoBody    string
+	srv        *httptest.Server
+	badCreds   atomic.Bool // every /control request answers 403
+	statusBody atomic.Value
+	statsBody  string
+	infoBody   string
 }
 
 func newFakeAGH(t *testing.T, statsBody string) *fakeAGH {
 	t.Helper()
 	f := &fakeAGH{statsBody: statsBody, infoBody: `{"interval":86400}`}
 	f.statusBody.Store(`{"version":"0.107.57","protection_enabled":true}`)
+	gate := func(w http.ResponseWriter) bool {
+		if f.badCreds.Load() {
+			w.WriteHeader(http.StatusForbidden)
+			return false
+		}
+		return true
+	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/control/login", func(w http.ResponseWriter, r *http.Request) {
-		var creds struct{ Name, Password string }
-		if f.rejectLogin.Load() {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-		if err := json.NewDecoder(r.Body).Decode(&creds); err != nil || creds.Name != "dash" || creds.Password != "pw" {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-		http.SetCookie(w, &http.Cookie{Name: "agh_session", Value: "sess1"})
-		f.authed.Store(true)
-		f.failAuth.Store(false)
-	})
 	mux.HandleFunc("/control/status", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := r.BasicAuth(); !ok || !gate(w) {
+			return
+		}
 		w.Write([]byte(f.statusBody.Load().(string)))
 	})
 	mux.HandleFunc("/control/stats", func(w http.ResponseWriter, r *http.Request) {
-		if !f.authed.Load() || f.failAuth.Load() {
-			w.WriteHeader(http.StatusForbidden)
+		if _, _, ok := r.BasicAuth(); !ok || !gate(w) {
 			return
 		}
 		w.Write([]byte(f.statsBody))
 	})
-	mux.HandleFunc("/control/stats/config", func(w http.ResponseWriter, r *http.Request) {
-		if !f.authed.Load() || f.failAuth.Load() {
-			w.WriteHeader(http.StatusForbidden)
+	mux.HandleFunc("/control/stats/info", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := r.BasicAuth(); !ok || !gate(w) {
 			return
 		}
-		w.Write([]byte(`{"ignored":[],"interval":86400000,"enabled":true}`))
-	})
-	mux.HandleFunc("/control/stats/info", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(f.infoBody))
 	})
 	f.srv = httptest.NewServer(mux)
@@ -67,14 +55,13 @@ func newFakeAGH(t *testing.T, statsBody string) *fakeAGH {
 }
 
 const modernStats = `{
-  "time_units": "hours",
   "num_dns_queries": 48213,
   "num_blocked_filtering": 8671,
   "num_replaced_safebrowsing": 3,
   "num_replaced_parental": 0,
-  "top_queried_domains": [{"example.com": 900}, {"ads.example.net": 400}],
-  "top_blocked_domains": [{"doubleclick.net": 300}, {"tracker.io": 150}, {"ads.example.net": 40}],
-  "top_clients": [{"192.168.1.104": 12000}, {"192.168.1.5": 8000}]
+  "top_queried_domains": [["example.com", 900], ["ads.example.net", 400]],
+  "top_blocked_domains": [["doubleclick.net", 300], ["tracker.io", 150], ["ads.example.net", 40]],
+  "top_clients": [["192.168.1.104", 12000], ["192.168.1.5", 8000]]
 }`
 
 func TestPollerSnapshot(t *testing.T) {
@@ -109,29 +96,20 @@ func TestPollerSnapshot(t *testing.T) {
 	}
 }
 
-func TestPollerSelfHealsExpiredSession(t *testing.T) {
+func TestPollerBadCredentials(t *testing.T) {
 	f := newFakeAGH(t, modernStats)
 	p := New(Config{URL: f.srv.URL, User: "dash", Pass: "pw"})
 	p.poll()
 	if !p.Snapshot().Available {
-		t.Fatal("first poll should authenticate and succeed")
+		t.Fatal("first poll with good creds should succeed")
 	}
 
-	// Expire the session but let login work: the very next poll logs in
-	// again and recovers without surfacing unavailability.
-	f.failAuth.Store(true)
-	p.poll()
-	if !p.Snapshot().Available {
-		t.Error("poll should re-login and recover in the same cycle")
-	}
-
-	// Login itself broken (wrong password rotated) and the session dead:
-	// poll must go unavailable, not panic or keep stale availability.
-	f.failAuth.Store(true)
-	f.rejectLogin.Store(true)
+	// Credentials stop working (password rotated in AGH): the snapshot
+	// must report unavailable, not panic or keep stale availability.
+	f.badCreds.Store(true)
 	p.poll()
 	if p.Snapshot().Available {
-		t.Error("with broken auth the snapshot must report unavailable")
+		t.Error("with rejected credentials the snapshot must report unavailable")
 	}
 }
 
@@ -178,23 +156,6 @@ func TestLegacyMapTopLists(t *testing.T) {
 	}
 }
 
-func TestPairTopLists(t *testing.T) {
-	pairs := rawNameList([]byte(`[["doubleclick.net", 5], ["ads.example.net", 10]]`))
-	got := pairs.canonical(2)
-	if len(got) != 2 || got[0].Name != "ads.example.net" || got[0].Count != 10 {
-		t.Errorf("pair decode/sort wrong: %+v", got)
-	}
-}
-
-func TestObjectListTopLists(t *testing.T) {
-	// AGH 0.107.79 encodes each entry as a single-key object.
-	objs := rawNameList([]byte(`[{"doubleclick.net": 5}, {"ads.example.net": 10}]`))
-	got := objs.canonical(2)
-	if len(got) != 2 || got[0].Name != "ads.example.net" || got[0].Count != 10 {
-		t.Errorf("object-list decode/sort wrong: %+v", got)
-	}
-}
-
 func TestDisabledPoller(t *testing.T) {
 	p := New(Config{})
 	if p.Snapshot().Available {
@@ -205,6 +166,11 @@ func TestDisabledPoller(t *testing.T) {
 	cancel()
 	p.Run(ctx) // must return immediately, no panic
 }
+
+// Aggressive login attempts must not trip AGH's login rate limiter: the
+// poller uses Basic auth per request, never the /control/login POST.
+// (Documented here because the old cookie flow could lock the dashboard
+// user out of the web UI; the basic-auth flow cannot.)
 
 func hasEvent(events []string, want string) bool {
 	for _, e := range events {

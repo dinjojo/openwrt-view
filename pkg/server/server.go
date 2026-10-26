@@ -21,8 +21,6 @@ import (
 	fiber "github.com/gofiber/fiber/v3"
 	recovermiddleware "github.com/gofiber/fiber/v3/middleware/recover"
 
-	"github.com/dinjojo/openwrt-view/pkg/sysmon"
-	"github.com/dinjojo/openwrt-view/pkg/tapo"
 	"github.com/dinjojo/openwrt-view/pkg/agh"
 	"github.com/dinjojo/openwrt-view/pkg/alerts"
 	"github.com/dinjojo/openwrt-view/pkg/clients"
@@ -35,6 +33,8 @@ import (
 	"github.com/dinjojo/openwrt-view/pkg/orbissn"
 	"github.com/dinjojo/openwrt-view/pkg/parser"
 	"github.com/dinjojo/openwrt-view/pkg/radio"
+	"github.com/dinjojo/openwrt-view/pkg/sysmon"
+	"github.com/dinjojo/openwrt-view/pkg/tapo"
 	"github.com/dinjojo/openwrt-view/pkg/types"
 	"github.com/dinjojo/openwrt-view/pkg/usage"
 	"github.com/dinjojo/openwrt-view/pkg/vm"
@@ -1245,16 +1245,40 @@ func (s *Server) handleAPITapo(c fiber.Ctx) error {
 // it and wires its events into the feed.
 func (s *Server) SetAGH(p *agh.Poller) { s.agh = p }
 
-// handleAPIDNS reports the AdGuard Home snapshot. When no AGH is
-// configured the answer is still 200 with available=false — the UI
-// treats that exactly like an unreachable AGH and hides DNS.
+// handleAPIDNS reports the AdGuard Home snapshot, with top-client IPs
+// resolved to device names (the AGH API only knows IPs). Resolution uses
+// the live client snapshot, so it works on every tab, not just where the
+// client cache is warm. When no AGH is configured the answer is still
+// 200 with available=false — the UI treats that exactly like an
+// unreachable AGH and hides DNS.
 func (s *Server) handleAPIDNS(c fiber.Ctx) error {
 	c.Set("Content-Type", "application/json; charset=utf-8")
 	if s.agh == nil {
 		b, _ := json.Marshal(agh.State{Available: false})
 		return c.Send(b)
 	}
-	b, _ := json.Marshal(s.agh.Snapshot())
+	st := s.agh.Snapshot()
+	if s.clientStore != nil && len(st.TopClients) > 0 {
+		byIP := map[string]string{}
+		for _, cl := range s.clientStore.Snapshot() {
+			if cl.IP != "" {
+				byIP[cl.IP] = cl.Name
+			}
+		}
+		resolved := make([]agh.NameCount, len(st.TopClients))
+		for i, tc := range st.TopClients {
+			if name := byIP[tc.Name]; name != "" && name != "untracked" {
+				tc.Name = name
+			} else if tc.Name == "127.0.0.1" || tc.Name == "::1" {
+				// The router itself (dnsmasq, local services) queries AGH
+				// directly from loopback; a raw loopback IP reads as a bug.
+				tc.Name = "Router (local)"
+			}
+			resolved[i] = tc
+		}
+		st.TopClients = resolved
+	}
+	b, _ := json.Marshal(st)
 	return c.Send(b)
 }
 

@@ -3,14 +3,13 @@
 // filtering activity: query and block counts over AGH's stats window,
 // the top blocked domains and the top clients by query volume.
 //
-// Authentication uses a dashboard user's credentials against
-// /control/login; the session cookie is reused across polls and
-// refreshed once on expiry. Everything degrades to Available=false —
-// the UI simply hides DNS when AGH is not configured or unreachable.
+// Authentication is preemptive HTTP Basic on every request — the
+// mechanism AGH's own OpenAPI spec documents. Everything degrades to
+// Available=false — the UI simply hides DNS when AGH is not configured
+// or unreachable.
 package agh
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -49,9 +48,13 @@ type Config struct {
 
 // Poller refreshes the AGH snapshot every 30 seconds. Stats move in
 // minute-scale aggregates, so faster polling changes nothing.
+//
+// Authentication is preemptive HTTP Basic on every request — the
+// mechanism AGH's own OpenAPI spec documents and what client libraries
+// (adguard-client-go et al.) use. Stateless, no session to expire.
 type Poller struct {
 	cfg Config
-	hc  *http.Client // carries the AGH session cookie via its Jar
+	hc  *http.Client
 
 	mu   sync.RWMutex
 	st   State
@@ -65,10 +68,9 @@ func New(cfg Config) *Poller {
 	if cfg.URL == "" {
 		return &Poller{}
 	}
-	jar, _ := cookieJar()
 	return &Poller{
 		cfg: cfg,
-		hc:  &http.Client{Timeout: 5 * time.Second, Jar: jar},
+		hc:  &http.Client{Timeout: 5 * time.Second},
 	}
 }
 
@@ -101,35 +103,14 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
-// login authenticates and stores the session cookie in the jar. AGH's
-// login authenticates and stores the session cookie in the jar. AGH's
-// login accepts {"name","password"} and answers 200 with a cookie.
-func (p *Poller) login() error {
-	body, _ := json.Marshal(map[string]string{"name": p.cfg.User, "password": p.cfg.Pass})
-	resp, err := p.hc.Post(p.cfg.URL+"/control/login", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return errStatus("login", resp.StatusCode)
-	}
-	return nil
-}
-
-// poll fetches status + stats; on an auth failure it logs in once more
-// and retries, so an expired session self-heals within one poll. A
-// disabled poller (empty URL) never touches the network.
+// poll fetches one snapshot. Auth is per-request Basic (see Poller), so
+// there is no session to refresh; a disabled poller (empty URL) never
+// touches the network.
 func (p *Poller) poll() {
 	if p.cfg.URL == "" || p.hc == nil {
 		return
 	}
 	st, err := p.fetch()
-	if err != nil && isAuthErr(err) {
-		if lerr := p.login(); lerr == nil {
-			st, err = p.fetch()
-		}
-	}
 	if err != nil {
 		p.mu.Lock()
 		prevAvail := p.st.Available
@@ -240,7 +221,13 @@ func (p *Poller) statsIntervalHours() (float64, error) {
 }
 
 func (p *Poller) getJSON(path string, out any) error {
-	resp, err := p.hc.Get(p.cfg.URL + path)
+	req, err := http.NewRequest(http.MethodGet, p.cfg.URL+path, nil)
+	if err != nil {
+		return err
+	}
+	// Preemptive Basic auth — AGH accepts it on every /control endpoint.
+	req.SetBasicAuth(p.cfg.User, p.cfg.Pass)
+	resp, err := p.hc.Do(req)
 	if err != nil {
 		return err
 	}
