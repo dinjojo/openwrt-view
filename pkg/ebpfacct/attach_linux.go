@@ -92,7 +92,7 @@ func (lc *linuxCollector) read() (map[string]Counters, error) {
 		return nil, errors.New("ebpfacct: device_bytes map missing")
 	}
 	var (
-		key  uint64
+		key uint64
 		// Field order mirrors struct dev_counters in counters.c:
 		// up = bytes FROM the client (its upload), down = bytes TO the
 		// client (its download). Counters is device-centric: Rx is the

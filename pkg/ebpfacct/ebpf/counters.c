@@ -8,6 +8,10 @@
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <bpf/bpf_helpers.h>
+
+// TCX chain-continue. TC_ACT_PIPE (3) ends the chain on kernel 6.8+;
+// only TCX_NEXT (-1) runs the next program and then the clsact filters.
+#define TCX_NEXT -1
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_tracing.h>
 #include <linux/pkt_cls.h>
@@ -46,11 +50,11 @@ int count_from_client(struct __sk_buff *skb) {
     void *end = (void *)(long)skb->data_end;
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > end)
-        return TC_ACT_OK;
+        return TCX_NEXT;
     struct dev_counters *c = counter_for(mac_key(eth->h_source));
     if (c)
         __sync_fetch_and_add(&c->up, skb->len);
-    return TC_ACT_OK;
+    return TCX_NEXT;
 }
 
 SEC("tc/egress")
@@ -59,11 +63,11 @@ int count_to_client(struct __sk_buff *skb) {
     void *end = (void *)(long)skb->data_end;
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > end)
-        return TC_ACT_OK;
+        return TCX_NEXT;
     struct dev_counters *c = counter_for(mac_key(eth->h_dest));
     if (c)
         __sync_fetch_and_add(&c->down, skb->len);
-    return TC_ACT_OK;
+    return TCX_NEXT;
 }
 
 char LICENSE[] SEC("license") = "MIT";

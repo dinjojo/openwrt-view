@@ -67,6 +67,7 @@ func main() {
 	tzName := flag.String("tz", envOr("OPENWRT_VIEW_TZ", "Local"), "time zone for day boundaries and the probe schedule: IANA name (Asia/Kolkata), POSIX string without DST (IST-5:30) or Local")
 	showVer := flag.Bool("version", false, "print version and exit")
 	ebpfIface := flag.String("acct-ebpf", "", "interface to count per-device traffic on with eBPF (e.g. br-lan; empty disables the spike collector)")
+	wanEbpf := flag.String("wan-ebpf", "", "WAN-edge eBPF collectors as wan,ifb,lan (e.g. eth0,ifb4eth0,br-lan; empty disables)")
 	netifySock := flag.String("netify-sock", envOr("NETIFY_SOCK", "/var/run/netifyd/netifyd.sock"), "netifyd DPI agent's JSON export socket; empty disables the per-app aggregates")
 
 	flag.Usage = func() {
@@ -190,6 +191,11 @@ func main() {
 	if *ebpfIface != "" {
 		if err := srv.EnableEBPFAcct(*ebpfIface); err != nil {
 			log.Logger.Warn().Err(err).Str("iface", *ebpfIface).Msg("eBPF accounting unavailable; continuing without it")
+		}
+	}
+	if *wanEbpf != "" {
+		if err := srv.EnableWANBPF(*wanEbpf); err != nil {
+			log.Logger.Warn().Err(err).Msg("WAN eBPF collectors unavailable; continuing without them")
 		}
 	}
 	srv.EnableNetify(*netifySock)

@@ -474,6 +474,14 @@
     .m-sub { font-size: var(--t-xs); color: var(--ink-2); margin-top: 2px; min-height: 1.2em; }
     .m-spark { display: block; width: 100%; height: 26px; margin-top: 4px; overflow: visible; }
     .meter-click { cursor: pointer; }
+    /* eBPF queue-delay histogram: one bar per log2-µs bucket. */
+    .q-hist { display: flex; align-items: flex-end; gap: 2px; height: 72px; margin-top: var(--s3);
+      padding: 6px 8px; background: var(--tape); border: 1px solid var(--groove); border-radius: var(--r-sm); }
+    .q-hist:empty::after { content: 'no packets measured in this window'; font-size: var(--t-xs); color: var(--ink-2); align-self: center; margin: auto; }
+    .q-hist .bar { flex: 1 1 0; min-width: 2px; background: var(--accent); border-radius: 2px 2px 0 0; opacity: .85; }
+    .q-hist .bar.hot { background: var(--lamp-crit); }
+    .q-hist-lab { display: flex; justify-content: space-between; font-size: var(--t-xs); color: var(--ink-2);
+      font-variant-numeric: tabular-nums; margin-top: 4px; padding: 0 8px; }
     /* Trends tab: quiet ledgers on one continuous surface. No boxed
        wells; hairline rows, small-caps section titles, one line per fact.
        Secondary detail (method notes, sample counts, older days, rarely
@@ -994,6 +1002,16 @@
       <h2 class="h2">Live queue state <span class="sub">refreshed every second &middot; history &amp; window selection: Trends &rarr; Shaper &amp; queue</span></h2>
       <p id="msg" class="empty">Waiting for data…</p>
       <div id="ifaces"></div>
+
+      <!-- Download queue delay from the eBPF collectors: the kernel times
+           each download between WAN arrival and LAN departure, so CAKE's
+           queueing shows up directly, per packet. -->
+      <section id="sqm-ebpf" class="sect hidden">
+        <div class="sect-head"><h2 class="h2">Download queue delay <span class="sub">eBPF &middot; WAN ingress &rarr; LAN egress, measured per packet &middot; 5 s window</span></h2></div>
+        <div id="qdelay-meters" class="meters"></div>
+        <div id="qdelay-hist" class="q-hist" aria-hidden="true"></div>
+        <div id="qdelay-hist-lab" class="q-hist-lab hidden"><span>1 &micro;s</span><span>1 s</span></div>
+      </section>
     </section>
 
     <!-- ═══ Tab: Clients ════════════════════════════════════════════════ -->
@@ -1117,6 +1135,17 @@
         </div>
         <div id="wan-strip" class="meters hidden" style="margin-bottom:var(--s5)"></div>
         <div id="sys-charts" class="charts"></div>
+      </section>
+      <!-- eBPF WAN gate + router-local service accounting -->
+      <section id="sys-wanbpf" class="sect hidden">
+        <div class="sect-head"><h2 class="h2">WAN gate &amp; router services <span class="sub">eBPF &middot; XDP on WAN, TC on LAN bridge &middot; cumulative since attach</span></h2></div>
+        <div id="wangate-meters" class="meters"></div>
+        <div class="overflow-x-auto tbl-wrap"><table class="tbl" style="min-width:560px;margin-top:var(--s4)">
+          <thead><tr>
+            <th>Service</th><th class="r">Port</th><th class="r">In (total)</th><th class="r">Out (total)</th><th class="r">In now</th><th class="r">Out now</th>
+          </tr></thead>
+          <tbody id="wangate-svc-rows"></tbody>
+        </table></div>
       </section>
       <!-- DNS filtering (AdGuard Home): hidden until /api/dns reports an AGH -->
       <section id="sys-dns" class="sect hidden">
@@ -2185,7 +2214,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (hb) hb.classList.toggle('hidden', name !== 'overview');
 
       // Always stop the other tabs' timers.
-      ['overview', 'clients', 'diag', 'system', 'trends'].forEach(t => { if (t !== name) stopTabTimers(t); });
+      ['overview', 'clients', 'diag', 'system', 'trends', 'sqm'].forEach(t => { if (t !== name) stopTabTimers(t); });
 
       if (name === 'overview') {
         pollOverview();
@@ -2199,7 +2228,10 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         loadTrendsPanels();
         if (!tabTimers.trends) tabTimers.trends = [setInterval(loadTrendsPanels, 300000)];
       } else if (name === 'sqm') {
-        // live queue stats stream in over SSE
+        // live queue stats stream in over SSE; the eBPF queue-delay
+        // section polls its cached snapshot on a slower cadence
+        loadWanbpf();
+        if (!tabTimers.sqm) tabTimers.sqm = [setInterval(loadWanbpf, 5000)];
       } else if (name === 'clients') {
         pollClients();
         renderClientsTable();
@@ -2221,7 +2253,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         loadSystemHistory();
         loadReport();
         loadDNS(); // DNS filtering section has data on first paint
-        tabTimers.system = [setInterval(loadSystemHistory, 60000), setInterval(loadReport, 600000), setInterval(loadDNS, 60000)];
+        loadWanbpf();
+        if (!tabTimers.system) tabTimers.system = [setInterval(loadSystemHistory, 60000), setInterval(loadReport, 600000), setInterval(loadDNS, 60000), setInterval(loadWanbpf, 10000)];
       }
     }
 
@@ -2235,13 +2268,104 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     function refreshTab() {
       if (activeTab === 'overview') { pollOverview(); loadOvIncidents(); loadRadio(); }
       else if (activeTab === 'trends') { loadTrendsPanels(); }
+      else if (activeTab === 'sqm') { loadWanbpf(); }
       else if (activeTab === 'clients') { pollClients(); renderClientsTable(); loadClientHistory(); }
       else if (activeTab === 'diag') { loadConnHealth(); loadIncidents(); loadDiagWanChart(); }
-      else if (activeTab === 'system') { loadSystemHistory(); loadReport(); }
+      else if (activeTab === 'system') { loadSystemHistory(); loadReport(); loadWanbpf(); }
       const lu = document.getElementById('last-updated');
       if (lu) { lu.style.color = 'var(--accent)'; setTimeout(() => { lu.style.color = ''; }, 600); }
     }
     document.getElementById('refresh-btn').addEventListener('click', refreshTab);
+
+    // ── eBPF WAN collectors (queue delay, WAN gate, services) ────────────
+
+    let wanbpfCache = null;   // last /api/wanbpf snapshot
+
+    /** Fetch the cached server-side snapshot and paint the active tab. */
+    async function loadWanbpf() {
+      try {
+        const d = await fetch(appURL('/api/wanbpf')).then(r => r.json());
+        wanbpfCache = d.snapshot || null;
+      } catch (_) { wanbpfCache = null; }
+      if (activeTab === 'sqm') renderWanbpfSqm();
+      if (activeTab === 'system') renderWanbpfSystem();
+    }
+
+    /** ms (or µs below a millisecond) from nanoseconds, unit included. */
+    function fmtMs(ns) {
+      if (ns >= 1e6) return (ns / 1e6).toFixed(2) + ' ms';
+      return (ns / 1e3).toFixed(0) + ' µs';
+    }
+
+    /** SQM tab: queue-delay readouts + log2-µs histogram. */
+    function renderWanbpfSqm() {
+      const sect = document.getElementById('sqm-ebpf');
+      const s = wanbpfCache;
+      if (!sect) return;
+      if (!s || !s.hooks || !s.hooks.length) { sect.classList.add('hidden'); return; }
+      sect.classList.remove('hidden');
+      const m = document.getElementById('qdelay-meters');
+      m.innerHTML =
+        '<div class="meter"><div class="m-lab">Average delay</div>' +
+        '<div class="m-val">' + fmtMs(s.q_avg_ns) + '</div>' +
+        '<div class="m-sub">mean over ' + fmtNum(s.q_count) + ' packets</div></div>' +
+        '<div class="meter"><div class="m-lab">Worst packet</div>' +
+        '<div class="m-val">' + fmtMs(s.q_max_ns) + '</div>' +
+        '<div class="m-sub">max in window</div></div>' +
+        '<div class="meter"><div class="m-lab">Packets measured</div>' +
+        '<div class="m-val">' + fmtNum(s.q_count) + '</div>' +
+        '<div class="m-sub">downloads leaving the LAN</div></div>';
+      const hist = document.getElementById('qdelay-hist');
+      const lab = document.getElementById('qdelay-hist-lab');
+      const buckets = s.hist || [];
+      const total = buckets.reduce((a, b) => a + Number(b), 0);
+      if (!total) { hist.innerHTML = ''; lab.classList.add('hidden'); return; }
+      const peak = Math.max.apply(null, buckets.map(Number));
+      // bucket i covers delays of 2^i µs; label the range from the data
+      const firstIdx = buckets.findIndex(v => v > 0);
+      let lastIdx = 0;
+      buckets.forEach((v, i) => { if (v > 0) lastIdx = i; });
+      hist.innerHTML = buckets.map((v, i) => {
+        if (!Number(v)) return '<div class="bar" style="height:2px;opacity:.25"></div>';
+        const pct = Math.max(3, Math.round(Number(v) / peak * 100));
+        // red once the bucket's lower edge passes 10 ms of queueing
+        const hot = (1 << i) >= 10000 && i >= firstIdx;
+        return '<div class="bar' + (hot ? ' hot' : '') + '" style="height:' + pct + '%"></div>';
+      }).join('');
+      lab.classList.remove('hidden');
+      lab.firstElementChild.textContent = ((1 << firstIdx) >= 1000 ? ((1 << firstIdx) / 1000) + ' ms' : (1 << firstIdx) + ' µs');
+      lab.lastElementChild.textContent = ((1 << (lastIdx + 1)) >= 1000 ? ((1 << (lastIdx + 1)) / 1000) + ' ms' : (1 << (lastIdx + 1)) + ' µs');
+    }
+
+    /** System tab: WAN gate meters + router service ledger. */
+    function renderWanbpfSystem() {
+      const sect = document.getElementById('sys-wanbpf');
+      const s = wanbpfCache;
+      if (!sect) return;
+      if (!s || !s.hooks || !s.hooks.length) { sect.classList.add('hidden'); return; }
+      sect.classList.remove('hidden');
+      const w = s.wan || {};
+      document.getElementById('wangate-meters').innerHTML =
+        '<div class="meter"><div class="m-lab">WAN packets</div><div class="m-val">' + fmtNum(w.pkts) + '</div>' +
+        '<div class="m-sub">' + fmtBytes(w.bytes) + ' inspected</div></div>' +
+        '<div class="meter"><div class="m-lab">Scan drops</div><div class="m-val ' + dropCls(w.scan_drop) + '">' + fmtNum(w.scan_drop) + '</div>' +
+        '<div class="m-sub">SYN flood sources rate-limited</div></div>' +
+        '<div class="meter"><div class="m-lab">Spoofed sources</div><div class="m-val ' + dropCls(w.spoof_seen) + '">' + fmtNum(w.spoof_seen) + '</div>' +
+        '<div class="m-sub">bogon-source packets seen</div></div>';
+      const rows = document.getElementById('wangate-svc-rows');
+      const svc = s.services || [];
+      if (!svc.length) {
+        rows.innerHTML = '<tr><td colspan="6" class="empty">No service traffic observed yet.</td></tr>';
+        return;
+      }
+      rows.innerHTML = svc.map(x =>
+        '<tr><td>' + h(x.label) + '</td>' +
+        '<td class="r num">' + x.port + '</td>' +
+        '<td class="r num">' + fmtBytes(x.rx_total) + '</td>' +
+        '<td class="r num">' + fmtBytes(x.tx_total) + '</td>' +
+        '<td class="r num">' + fmtBits(x.rx_win / 5) + '</td>' +
+        '<td class="r num">' + fmtBits(x.tx_win / 5) + '</td></tr>').join('');
+    }
 
     // ── Clients tab ───────────────────────────────────────────────────────
 

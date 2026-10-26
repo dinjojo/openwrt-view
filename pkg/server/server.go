@@ -40,6 +40,7 @@ import (
 	"github.com/dinjojo/openwrt-view/pkg/usage"
 	"github.com/dinjojo/openwrt-view/pkg/vm"
 	"github.com/dinjojo/openwrt-view/pkg/wan"
+	"github.com/dinjojo/openwrt-view/pkg/wanbpf"
 	"github.com/dinjojo/openwrt-view/web"
 )
 
@@ -67,6 +68,9 @@ type Server struct {
 	clientStore  *clients.Store
 	netify       *netify.Collector   // netifyd DPI aggregates; nil unless the socket exists
 	ebpf         *ebpfacct.Collector // eBPF per-device counters; nil unless EnableEBPFAcct
+	wanbpf       *wanbpf.Collector   // WAN-edge eBPF collectors; nil unless EnableWANBPF
+	wanbpfMu     sync.RWMutex
+	wanbpfSnap   *wanbpf.Snapshot
 	wan          *wan.Poller
 	sys          *sysmon.Pollers
 	orbi         *orbi.Poller
@@ -186,6 +190,9 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 		if s.ebpf != nil {
 			s.ebpf.Close()
 		}
+		if s.wanbpf != nil {
+			s.wanbpf.Close()
+		}
 		_ = s.app.Shutdown()
 	}()
 	log.Logger.Info().Str("addr", addr).Dur("interval", s.pollInterval).Msg("listening")
@@ -220,6 +227,50 @@ func (s *Server) EnableEBPFAcct(iface string) error {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 		}
 		return c.JSON(fiber.Map{"iface": iface, "devices": devices})
+	})
+	return nil
+}
+
+// EnableWANBPF attaches the WAN-edge eBPF collectors — XDP gate on the
+// WAN device, queue-delay pair on WAN+IFB, service accounting on the
+// LAN bridge — and serves windowed snapshots at /api/wanbpf. The spec
+// is "wan,ifb,lan", e.g. "eth0,ifb4eth0,br-lan". A poll goroutine reads
+// the kernel maps every 5 s so the endpoint answers from cache.
+func (s *Server) EnableWANBPF(spec string) error {
+	parts := strings.Split(spec, ",")
+	if len(parts) != 3 {
+		return fmt.Errorf("wanbpf: -wan-ebpf wants \"wan,ifb,lan\", got %q", spec)
+	}
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	col, err := wanbpf.Attach(parts[0], parts[1], parts[2])
+	if err != nil {
+		return err
+	}
+	s.wanbpf = col
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for range t.C {
+			snap, err := col.Read()
+			if err != nil {
+				log.Logger.Warn().Err(err).Msg("wanbpf read failed")
+				continue
+			}
+			s.wanbpfMu.Lock()
+			s.wanbpfSnap = snap
+			s.wanbpfMu.Unlock()
+		}
+	}()
+	s.app.Get("/api/wanbpf", func(c fiber.Ctx) error {
+		s.wanbpfMu.RLock()
+		snap := s.wanbpfSnap
+		s.wanbpfMu.RUnlock()
+		if snap == nil {
+			return c.JSON(fiber.Map{"ifaces": parts, "pending": true})
+		}
+		return c.JSON(fiber.Map{"ifaces": parts, "snapshot": snap})
 	})
 	return nil
 }
