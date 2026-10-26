@@ -334,6 +334,14 @@
     .ov-usage-row .gb { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
     .ov-usage-row .pc { color: var(--ink-2); min-width: 2.6rem; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
+    /* Applications: ECharts-style composition donut beside the trend
+       chart. Hovering a slice thickens it and swaps the centre readout
+       to that app (classic pie behaviour, in the house idiom). */
+    .cl-apps-viz { display: flex; align-items: center; gap: var(--s5); flex-wrap: wrap; }
+    .cl-apps-viz .charts { flex: 1 1 280px; }
+    #cl-apps-donut circle { transition: stroke-width .25s cubic-bezier(.22,1,.36,1); cursor: default; }
+    .ov-donut-c .who { font-size: var(--t-2xs); color: var(--ink-2); max-width: 96px; line-height: 1.25; }
+
     /* Wi-Fi band split */
     .ov-bandbar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--well); margin-bottom: var(--s3); }
     .ov-bandbar i { display: block; height: 100%; }
@@ -1038,7 +1046,13 @@
         <div class="sect-head">
           <h2 class="h2">Applications <span class="sub" id="cl-apps-sub"></span></h2>
         </div>
-        <div id="cl-apps-chart" class="charts"></div>
+        <div class="cl-apps-viz">
+          <div class="ov-donut-wrap">
+            <svg id="cl-apps-donut" width="112" height="112" viewBox="0 0 112 112" role="img" aria-label="Traffic share by application donut chart"></svg>
+            <div class="ov-donut-c"><b class="num" id="cl-apps-donut-val">–</b><span class="who" id="cl-apps-donut-lab">total</span></div>
+          </div>
+          <div id="cl-apps-chart" class="charts"></div>
+        </div>
         <div class="overflow-x-auto">
           <table class="tbl fixed" style="min-width:780px">
             <colgroup>
@@ -2312,6 +2326,55 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       }), 'Traffic by application (2h)', v => fmtBytes(v) + '/min', 'cl-x'));
     }
 
+    /** Composition donut: each top app's share of the window's total
+     *  traffic, same colours as the table dots and trend lines, so the
+     *  table below doubles as the legend. ECharts-pie behaviour in the
+     *  house idiom: hovering a slice thickens it and swaps the centre
+     *  readout to that app; leaving reverts to the window total. */
+    function renderAppsDonut(apps) {
+      const svg = document.getElementById('cl-apps-donut');
+      const val = document.getElementById('cl-apps-donut-val');
+      const lab = document.getElementById('cl-apps-donut-lab');
+      if (!svg || !val || !lab) return;
+      const rows = apps.filter(a => (a.total || 0) > 0)
+        .sort((a, b) => (b.total || 0) - (a.total || 0));
+      const grand = rows.reduce((a, x) => a + (x.total || 0), 0);
+      val.textContent = grand ? fmtBytes(grand) : '–';
+      lab.textContent = 'total';
+      if (!grand) { svg.innerHTML = ''; return; }
+      // Top 5 slices, the rest folded into "Other".
+      const top = rows.slice(0, 5);
+      const rest = rows.slice(5).reduce((a, x) => a + (x.total || 0), 0);
+      const slices = rest > 0 ? top.concat([{ name: 'Other', tag: '', total: rest }]) : top;
+      const C = 2 * Math.PI * 44;
+      let off = 0;
+      svg.innerHTML = slices.map((s, i) => {
+        const frac = s.total / grand;
+        const len = Math.max(0, frac * C - 2); // 2px gap between slices
+        const col = i < top.length ? appColor(s.tag) : '#5c574e';
+        return '<circle cx="56" cy="56" r="44" fill="none" stroke="' + col +
+          '" stroke-width="18" stroke-dasharray="' + len.toFixed(1) + ' ' + (C - len).toFixed(1) +
+          '" stroke-dashoffset="' + (-off).toFixed(1) + '" transform="rotate(-90 56 56)" stroke-linecap="butt"' +
+          ' data-nm="' + h(s.name) + '" data-bytes="' + fmtBytes(s.total) + '" data-pc="' + (frac * 100).toFixed(1) + '">' +
+          '<title>' + h(s.name) + ' · ' + (frac * 100).toFixed(1) + '% · ' + fmtBytes(s.total) + '</title></circle>';
+      }).join('');
+      // Centre readout follows the hovered slice, ECharts-style.
+      svg.onmouseover = e => {
+        const c = e.target.closest('circle[data-nm]');
+        if (!c) return;
+        val.textContent = c.dataset.bytes;
+        lab.innerHTML = h(c.dataset.nm) + '<br>' + h(c.dataset.pc) + '%';
+        c.setAttribute('stroke-width', '24');
+      };
+      svg.onmouseout = e => {
+        const c = e.target.closest('circle[data-nm]');
+        if (!c) return;
+        val.textContent = fmtBytes(grand);
+        lab.textContent = 'total';
+        c.setAttribute('stroke-width', '18');
+      };
+    }
+
     async function fetchApps() {
       try {
         const r = await fetch(appURL('/api/apps'));
@@ -2331,8 +2394,11 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     }
 
     function renderApps() {
-      renderAppsChart(appsCache && appsCache.apps || []);
+      // Table first: it unhides the section, so the trend chart below
+      // measures its real container width instead of the hidden fallback.
       renderAppsTable();
+      renderAppsDonut(appsCache && appsCache.apps || []);
+      renderAppsChart(appsCache && appsCache.apps || []);
       if (clModal.mac) renderClientApps();
     }
 
