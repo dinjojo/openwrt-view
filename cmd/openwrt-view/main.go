@@ -67,6 +67,7 @@ func main() {
 	tzName := flag.String("tz", envOr("OPENWRT_VIEW_TZ", "Local"), "time zone for day boundaries and the probe schedule: IANA name (Asia/Kolkata), POSIX string without DST (IST-5:30) or Local")
 	showVer := flag.Bool("version", false, "print version and exit")
 	ebpfIface := flag.String("acct-ebpf", "", "interface to count per-device traffic on with eBPF (e.g. br-lan; empty disables the spike collector)")
+	netifySock := flag.String("netify-sock", envOr("NETIFY_SOCK", "/var/run/netifyd/netifyd.sock"), "netifyd DPI agent's JSON export socket; empty disables the per-app aggregates")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "openwrt-view %s\n\n", Version)
@@ -191,6 +192,7 @@ func main() {
 			log.Logger.Warn().Err(err).Str("iface", *ebpfIface).Msg("eBPF accounting unavailable; continuing without it")
 		}
 	}
+	srv.EnableNetify(*netifySock)
 	if *tapoHost != "" {
 		srv.SetTapoPoller(tapo.New(tapo.Config{Host: *tapoHost, User: *tapoUser, Pass: *tapoPass}, nil))
 		log.Logger.Info().Str("host", *tapoHost).Msg("Tapo plug monitoring enabled")

@@ -1030,6 +1030,28 @@
         </div>
       </section>
 
+      <!-- Per-application traffic (netifyd DPI): hidden until /api/apps
+           reports a non-empty aggregation -->
+      <section id="cl-apps" class="sect hidden">
+        <div class="sect-head">
+          <h2 class="h2">Applications <span class="sub" id="cl-apps-sub"></span></h2>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="tbl fixed" style="min-width:760px">
+            <colgroup>
+              <col /><col style="width:110px" /><col style="width:110px" /><col style="width:170px" /><col />
+            </colgroup>
+            <thead>
+              <tr><th>Application</th><th class="r">↓ total</th><th class="r">↑ total</th>
+                <th class="r">share</th><th>Devices</th></tr>
+            </thead>
+            <tbody id="cl-apps-tbody">
+              <tr><td colspan="5" class="empty">Loading applications…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- Top-talker history -->
       <section class="sect">
         <div class="sect-head">
@@ -1187,6 +1209,9 @@
         <div id="clm-charts" class="charts" style="padding:var(--s5)"></div>
         <!-- Per-day usage from /api/usage; hidden when the endpoint is absent -->
         <div id="clm-usage" class="hidden" style="padding:0 var(--s5) var(--s5)"></div>
+        <!-- Per-application traffic for this device (netifyd DPI); hidden
+             while netifyd is absent or has seen nothing from this MAC -->
+        <div id="clm-apps" class="hidden" style="padding:0 var(--s5) var(--s5)"></div>
       </div>
     </div>
   </div>
@@ -2204,6 +2229,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
 
     async function pollClients() {
       if (Date.now() - orbiAt > 60000) loadOrbi();
+      loadApps();
       try {
         const r = await fetch(appURL('/api/clients'));
         if (!r.ok) return;
@@ -2211,6 +2237,94 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         renderClientsTable();
         renderClientKPIs();
       } catch (e) { /* transient */ }
+    }
+
+    // ── Applications (netifyd DPI, /api/apps) ─────────────────────────────
+    // Per-application byte totals for the whole aggregation window (since
+    // netifyd started). One shared fetch feeds both the Clients-tab table
+    // and the per-device list in the client modal. Endpoint absent (503) →
+    // both stay hidden.
+    let appsCache = null, appsAt = 0;   // null = endpoint unavailable or not yet fetched
+    const normMac = s => String(s || '').toLowerCase();
+
+    async function fetchApps() {
+      try {
+        const r = await fetch(appURL('/api/apps'));
+        if (!r.ok) { appsCache = null; return; }
+        appsCache = await r.json();
+        appsAt = Date.now();
+      } catch (e) { /* transient */ }
+    }
+
+    async function loadApps(force) {
+      const tabActive = document.querySelector('.tab-btn[data-tab="clients"].tab-active');
+      const modalOpen = clModal.mac;
+      if (!tabActive && !modalOpen) return;
+      if (!force && appsCache && Date.now() - appsAt < 10000) { renderApps(); return; }
+      await fetchApps();
+      renderApps();
+    }
+
+    function renderApps() {
+      renderAppsTable();
+      if (clModal.mac) renderClientApps();
+    }
+
+    /** Clients-tab table: top applications with ↓/↑ totals, share of the
+     *  window's traffic and the devices behind each app. */
+    function renderAppsTable() {
+      const sect = document.getElementById('cl-apps');
+      const body = document.getElementById('cl-apps-tbody');
+      if (!sect || !body) return;
+      const apps = appsCache && appsCache.apps || [];
+      if (!appsCache || !apps.length) { sect.classList.add('hidden'); return; }
+      const grand = apps.reduce((a, x) => a + (x.total || 0), 0) || 1;
+      document.getElementById('cl-apps-sub').textContent =
+        'per-device traffic since ' + new Date(appsCache.started).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
+        ' · ' + appsCache.flows + ' flows live';
+      body.innerHTML = apps.slice(0, 12).map(a => {
+        const devs = (a.device || []).slice(0, 3).map(d =>
+          h(d.name || d.mac) + ' <span class="num muted xs">' + fmtBytes(d.total || 0) + '</span>'
+        ).join('<span class="sep">·</span>');
+        const more = (a.device || []).length > 3
+          ? ' <span class="xs muted">+' + (a.device.length - 3) + ' more</span>' : '';
+        const share = Math.max(2, (a.total || 0) / grand * 100).toFixed(1);
+        return '<tr>' +
+          '<td><span class="strong">' + h(a.name) + '</span>' +
+            (a.host ? '<div class="xs muted truncate" style="max-width:260px">' + h(a.host) + '</div>' : '') + '</td>' +
+          '<td class="r num dl">' + fmtBytes(a.down || 0) + '</td>' +
+          '<td class="r num">' + fmtBytes(a.up || 0) + '</td>' +
+          '<td class="r"><div class="bar" style="margin:0"><i style="width:' + share + '%;background:var(--dl)"></i></div></td>' +
+          '<td class="sm">' + (devs || '<span class="muted">–</span>') + more + '</td>' +
+        '</tr>';
+      }).join('');
+      sect.classList.remove('hidden');
+    }
+
+    /** Client-modal section: this device's applications, biggest first. */
+    function renderClientApps() {
+      const el = document.getElementById('clm-apps');
+      if (!el || !clModal.mac) return;
+      const mac = normMac(clModal.mac);
+      const mine = ((appsCache && appsCache.apps) || [])
+        .map(a => ({ a, d: (a.device || []).find(d => normMac(d.mac) === mac) }))
+        .filter(x => x.d)
+        .sort((x, y) => (y.d.total || 0) - (x.d.total || 0));
+      if (!mine.length) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+      const head = '<div class="sect-head" style="border-top:1px solid var(--groove);padding-top:var(--s4)">' +
+        '<h3 class="h3">Applications <span class="normal muted sm">since netifyd start</span></h3></div>';
+      const max = Math.max(...mine.map(x => Math.max(x.d.down || 0, x.d.up || 0)), 1e-9);
+      const bar = (v, col) => '<div class="bar" style="margin:0"><i style="width:' +
+        (v > 0 ? Math.max(2, v / max * 100).toFixed(1) : 0) + '%;background:' + col + '"></i></div>';
+      el.innerHTML = head +
+        '<div class="stack">' + mine.map(({ a, d }) =>
+          '<div class="ubar">' +
+            '<span style="grid-row:span 2" class="strong truncate">' + h(a.name) + '</span>' +
+            bar(d.down || 0, 'var(--dl)') + '<span class="num right">' + fmtBytes(d.down || 0) + '</span>' +
+            bar(d.up || 0, 'var(--ul)') + '<span class="num right muted">' + fmtBytes(d.up || 0) + '</span>' +
+          '</div>').join('') + '</div>' +
+        '<div class="xs muted mt2"><span class="swatch dl"></span> downloaded<span class="sep">·</span><span class="swatch ul"></span> uploaded</div>';
+      el.classList.remove('hidden');
     }
 
     // Persisted MAC -> friendly-name history (/api/names). Lets every
@@ -2908,8 +3022,11 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       document.getElementById('client-modal').style.display = 'flex';
       const us = document.getElementById('clm-usage');
       if (us) { us.classList.add('hidden'); us.innerHTML = ''; }
+      const ca = document.getElementById('clm-apps');
+      if (ca) { ca.classList.add('hidden'); ca.innerHTML = ''; }
       requestAnimationFrame(loadClientModalHistory);
       loadClientUsage();
+      loadApps(true);
       if (clModal.timer) clearInterval(clModal.timer);
       clModal.timer = setInterval(loadClientModalHistory, 60000);
     }
@@ -2924,6 +3041,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (cd) cd.innerHTML = '';
       const us = document.getElementById('clm-usage');
       if (us) { us.classList.add('hidden'); us.innerHTML = ''; }
+      const ca = document.getElementById('clm-apps');
+      if (ca) { ca.classList.add('hidden'); ca.innerHTML = ''; }
     }
 
     // Per-day usage (/api/usage?days=7) shared by every client modal; cached
