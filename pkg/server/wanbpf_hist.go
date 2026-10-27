@@ -1,6 +1,7 @@
 package server
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -12,16 +13,18 @@ import (
 // last 24 hours without an external time-series store. The live 5 s
 // windows on the SQM tab answer "who is slow right now"; this ring
 // answers "when, and how often" — the intermittent 10-second path
-// spikes a live window misses between looks.
+// spikes a live window misses between looks. One ring point aggregates
+// twelve consecutive 5 s windows (a full minute): count and mean are
+// the minute's totals and weighted mean, max is the worst window.
 //
 // One point per minute caps the ring at 1440 points per day; each
 // point carries only the devices with samples in that minute.
 
 type wanbpfHistDev struct {
 	Mac      string `json:"mac"`
-	WinAvgNs uint64 `json:"win_avg_ns"` // windowed mean RTT
-	MaxNs    uint64 `json:"max_ns"`     // windowed worst RTT
-	WinCount uint64 `json:"win_count"`  // samples in the window
+	WinAvgNs uint64 `json:"win_avg_ns"` // minute's RTT mean
+	MaxNs    uint64 `json:"max_ns"`     // worst RTT in the minute
+	WinCount uint64 `json:"win_count"`  // samples in the minute
 }
 
 type wanbpfHistPoint struct {
@@ -68,29 +71,74 @@ func (r *wanbpfRing) all() []wanbpfHistPoint {
 // wanbpfHistCap is 24 h at one sample per minute.
 const wanbpfHistCap = 24 * 60
 
-// recordWanbpfHistory samples one snapshot into the ring. The poller
-// ticks every 5 s; only every twelfth read lands in the ring, so the
-// per-device window between recorded reads covers a full minute.
-func (s *Server) recordWanbpfHistory(snap *wanbpf.Snapshot) {
+// wanbpfAgg accumulates twelve consecutive 5 s poller reads so one
+// ring point covers a full minute. Owned by the poller goroutine —
+// the HTTP handler reads only through the ring's lock.
+type wanbpfAgg struct {
+	n        uint64
+	qCount   uint64
+	qSumProd uint64 // sum of QAvgNs × QCount
+	qMaxNs   uint64
+	devs     map[string]*wanbpfAggDev
+}
+
+type wanbpfAggDev struct {
+	winCount uint64
+	sumProd  uint64 // sum of WinAvgNs × WinCount
+	maxNs    uint64
+}
+
+// wanbpfHistEvery is the number of 5 s windows aggregated per ring point.
+const wanbpfHistEvery = 12
+
+// sampleWanbpf folds one snapshot into the minute accumulator and, on
+// the twelfth read, records the aggregate into the ring.
+func (s *Server) sampleWanbpf(snap *wanbpf.Snapshot) {
 	if s.wanbpfHist == nil || snap == nil {
 		return
 	}
-	p := wanbpfHistPoint{
-		T:      time.Now().Unix(),
-		QAvgNs: snap.QAvgNs,
-		QMaxNs: snap.QMaxNs,
-		QCount: snap.QCount,
+	if s.wanbpfAgg == nil {
+		s.wanbpfAgg = &wanbpfAgg{devs: map[string]*wanbpfAggDev{}}
+	}
+	a := s.wanbpfAgg
+	a.n++
+	a.qCount += snap.QCount
+	a.qSumProd += snap.QAvgNs * snap.QCount
+	if snap.QMaxNs > a.qMaxNs {
+		a.qMaxNs = snap.QMaxNs
 	}
 	for _, r := range snap.Srtt {
 		if r.WinCount == 0 {
-			continue // nothing measured in this window
+			continue // idle device this window
+		}
+		d := a.devs[r.Mac]
+		if d == nil {
+			d = &wanbpfAggDev{}
+			a.devs[r.Mac] = d
+		}
+		d.winCount += r.WinCount
+		d.sumProd += r.WinAvgNs * r.WinCount
+		if r.MaxNs > d.maxNs {
+			d.maxNs = r.MaxNs
+		}
+	}
+	if a.n < wanbpfHistEvery {
+		return
+	}
+	p := wanbpfHistPoint{T: time.Now().Unix(), QCount: a.qCount, QMaxNs: a.qMaxNs}
+	if a.qCount > 0 {
+		p.QAvgNs = a.qSumProd / a.qCount
+	}
+	for mac, d := range a.devs {
+		if d.winCount == 0 {
+			continue
 		}
 		p.Devs = append(p.Devs, wanbpfHistDev{
-			Mac:      r.Mac,
-			WinAvgNs: r.WinAvgNs,
-			MaxNs:    r.MaxNs,
-			WinCount: r.WinCount,
+			Mac: mac, WinCount: d.winCount, MaxNs: d.maxNs, WinAvgNs: d.sumProd / d.winCount,
 		})
 	}
+	sort.Slice(p.Devs, func(i, j int) bool { return p.Devs[i].WinCount > p.Devs[j].WinCount })
 	s.wanbpfHist.add(p)
+	a.n, a.qCount, a.qSumProd, a.qMaxNs = 0, 0, 0, 0
+	a.devs = map[string]*wanbpfAggDev{}
 }

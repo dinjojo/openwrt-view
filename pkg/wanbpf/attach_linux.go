@@ -18,6 +18,8 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
+
+	"github.com/dinjojo/openwrt-view/pkg/log"
 )
 
 //go:embed wan.bpf.o
@@ -271,27 +273,17 @@ func (lc *linuxCollector) read(hooks []string) (*Snapshot, error) {
 		}
 	}
 
-	// Per-client passive RTT (per-CPU hash keyed by MAC). Same
-	// windowed diff as the queue delay; the kernel's per-client max is
-	// reset after each read so each window reports its own worst RTT.
+	// Per-client passive RTT (hash keyed by MAC). Same windowed diff
+	// as the queue delay; the kernel's per-client max is reset after
+	// each read so each window reports its own worst RTT.
 	if m := lc.coll.Maps["srtt_hist"]; m != nil {
 		var (
 			mk   uint64
-			vals []qDelayPerCPU
+			vals qDelayPerCPU
 			iter = m.Iterate()
 		)
 		for iter.Next(&mk, &vals) {
-			var cur qDelayPerCPU
-			for _, v := range vals {
-				cur.Count += v.Count
-				cur.SumNs += v.SumNs
-				if v.MaxNs > cur.MaxNs {
-					cur.MaxNs = v.MaxNs
-				}
-				for i := range cur.Hist {
-					cur.Hist[i] += v.Hist[i]
-				}
-			}
+			cur := vals
 			prev := lc.prevSrtt[mk]
 			dc := cur.Count - min64(prev.Count, cur.Count)
 			if cur.Count < prev.Count { // counters reset (attach race): resync
@@ -312,13 +304,21 @@ func (lc *linuxCollector) read(hooks []string) (*Snapshot, error) {
 			lc.prevSrtt[mk] = cur
 			// Reset this client's max so the next window reports its
 			// own worst sample (same tiny race as the queue delay).
-			reset := vals
+			// Re-read first: vals is the snapshot Iterate took, and
+			// Put would clobber counters the kernel advanced since.
+			var reset []qDelayPerCPU
+			if err := m.Lookup(mk, &reset); err != nil {
+				continue
+			}
 			for i := range reset {
 				reset[i].MaxNs = 0
 			}
 			if err := m.Put(mk, reset); err != nil {
 				break
 			}
+		}
+		if err := iter.Err(); err != nil {
+			log.Logger.Warn().Err(err).Msg("srtt walk failed; partial window")
 		}
 		sortSrtt(snap.Srtt)
 	}
@@ -349,6 +349,9 @@ func (lc *linuxCollector) read(hooks []string) (*Snapshot, error) {
 			}
 			snap.Services = append(snap.Services, s)
 			lc.prevP[port] = cur
+		}
+		if err := iter.Err(); err != nil {
+			log.Logger.Warn().Err(err).Msg("local_bytes walk failed; partial window")
 		}
 		sortServices(snap.Services)
 	}

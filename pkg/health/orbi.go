@@ -83,7 +83,11 @@ func evalWifiSignal(op *orbi.Poller) Check {
 					continue
 				}
 				if dev.Signal == weakest && (dev.Name == "" || dev.Name == "unknown") {
-					whoLabel = "an unnamed device (" + strings.ToUpper(dev.MAC[:8]) + "…, randomized MAC)"
+					mac := strings.ToUpper(dev.MAC)
+					if len(mac) > 8 {
+						mac = mac[:8]
+					}
+					whoLabel = "an unnamed device (" + mac + "…, randomized MAC)"
 					break
 				}
 			}

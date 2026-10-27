@@ -1689,6 +1689,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
             label:    s.label,
             stroke:   s.stroke,
             fill:     s.fill,
+            dash:     s.dash,   // dashed series (e.g. "worst" lines) must stay dashed
             width:    1.5,
             spanGaps: true,
             points:   { show: false },
@@ -2049,7 +2050,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           ${cs.memory_used       ? statRow('qdisc memory', h(cs.memory_used) + ' / ' + h(cs.memory_total)) : ''}
           ${cs.capacity_estimate ? statRow('capacity',     h(cs.capacity_estimate)) : ''}
           ${cs.min_net_size      ? statRow('packet size',  h(cs.min_net_size) + ' \u2013 ' + h(cs.max_net_size) + ' B') : ''}
-          ${cs.backlog_bytes     ? statRow('backlog now',  h(cs.backlog_bytes) + ' / ' + fmtNum(cs.backlog_pkts) + 'p') : ''}
+          ${cs.backlog_bytes     ? statRow('backlog now',  fmtTcBytes(cs.backlog_bytes) + ' / ' + fmtNum(cs.backlog_pkts) + 'p') : ''}
         </div>`;
 
       return `
@@ -2340,7 +2341,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       const worst = new Map();
       recent.forEach(p => {
         const w = p.devs.reduce((a, d) => ((d.win_avg_ns || 0) > ((a && a.win_avg_ns) || 0) ? d : a), null);
-        if (w) worst.set(w.mac, (worst.get(w.mac) || 0) + 1);
+        // 50 ms floor: on a quiet network a device with a handful of
+        // samples can top every window; only count genuinely slow ones.
+        if (w && (w.win_avg_ns || 0) >= 50e6) worst.set(w.mac, (worst.get(w.mac) || 0) + 1);
       });
       const out = new Set();
       for (const [mac, n] of worst) {
@@ -2350,11 +2353,11 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     }
     async function refreshSqmHist() {
       if (Date.now() - sqmHistAt < 300000) return;
-      sqmHistAt = Date.now();
       try {
         const r = await fetch(appURL('/api/history/wanbpf'));
         if (!r.ok) return;
         sqmHistCache = (await r.json()).points || [];
+        sqmHistAt = Date.now();   // only a successful fetch counts
       } catch (_) { return; }
       renderWanbpfSqm();   // re-render once the chronic set is current
     }
@@ -2449,7 +2452,10 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       const lab = document.getElementById('qdelay-hist-lab');
       const buckets = s.hist || [];
       const total = buckets.reduce((a, b) => a + Number(b), 0);
-      if (!total) { hist.innerHTML = ''; lab.classList.add('hidden'); return; }
+      if (!total) {
+        hist.innerHTML = '';
+        lab.classList.add('hidden');
+      } else {
       const peak = Math.max.apply(null, buckets.map(Number));
       // bucket i covers delays of 2^i µs; label the range from the data
       const firstIdx = buckets.findIndex(v => v > 0);
@@ -2459,12 +2465,13 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         if (!Number(v)) return '<div class="bar" style="height:2px;opacity:.25"></div>';
         const pct = Math.max(3, Math.round(Number(v) / peak * 100));
         // red once the bucket's lower edge passes 10 ms of queueing
-        const hot = (1 << i) >= 10000 && i >= firstIdx;
+        const hot = (2 ** i) >= 10000 && i >= firstIdx;
         return '<div class="bar' + (hot ? ' hot' : '') + '" style="height:' + pct + '%"></div>';
       }).join('');
       lab.classList.remove('hidden');
-      lab.firstElementChild.textContent = ((1 << firstIdx) >= 1000 ? ((1 << firstIdx) / 1000) + ' ms' : (1 << firstIdx) + ' µs');
-      lab.lastElementChild.textContent = ((1 << (lastIdx + 1)) >= 1000 ? ((1 << (lastIdx + 1)) / 1000) + ' ms' : (1 << (lastIdx + 1)) + ' µs');
+      lab.firstElementChild.textContent = ((2 ** firstIdx) >= 1000 ? ((2 ** firstIdx) / 1000) + ' ms' : (2 ** firstIdx) + ' µs');
+      lab.lastElementChild.textContent = ((2 ** (lastIdx + 1)) >= 1000 ? ((2 ** (lastIdx + 1)) / 1000) + ' ms' : (2 ** (lastIdx + 1)) + ' µs');
+      }
 
       // Per-device passive RTT, friendliest name first.
       const swrap = document.getElementById('srtt-wrap');
@@ -2667,6 +2674,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           '" stroke-dashoffset="' + (-off).toFixed(1) + '" transform="rotate(-90 56 56)" stroke-linecap="butt"' +
           ' data-nm="' + h(s.name) + '" data-bytes="' + fmtBytes(s.total) + '" data-pc="' + (frac * 100).toFixed(1) + '">' +
           '<title>' + h(s.name) + ' · ' + (frac * 100).toFixed(1) + '% · ' + fmtBytes(s.total) + '</title></circle>';
+        off += frac * C;   // advance so the next slice starts here
       }).join('');
       // Centre readout follows the hovered slice, ECharts-style.
       svg.onmouseover = e => {
@@ -2861,7 +2869,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         'of ' + list.length + ' tracked';
       document.getElementById('cl-rx').textContent = fmtBits(rxSum);
       document.getElementById('cl-tx').textContent = fmtBits(txSum);
-      const top = list.find(c => c.online && (c.rx_rate + c.tx_rate) > 1024);
+      const top = list.filter(c => c.online && (c.rx_rate + c.tx_rate) > 1024)
+        .reduce((a, c) => (!a || (c.rx_rate + c.tx_rate) > (a.rx_rate + a.tx_rate) ? c : a), null);
       const topEl = document.getElementById('cl-top');
       if (top) {
         topEl.textContent = top.name || top.mac;

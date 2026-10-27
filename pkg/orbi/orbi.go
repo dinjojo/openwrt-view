@@ -244,10 +244,16 @@ func (p *Poller) refresh() {
 	}
 
 	// Attached devices via SOAP. On failure keep the last device list and
-	// flag it (Busy) instead of alerting — data is stale, not wrong.
+	// flag it (Busy) instead of alerting — data is stale, not wrong. The
+	// commit below replaces the whole state, so the previous snapshot's
+	// device/radio/satellite lists must be carried forward explicitly or
+	// one busy poll would present an empty network.
 	devs, err := p.soapDevices()
 	if err != nil {
 		st.Busy = true
+		if prev := p.Snapshot(); len(prev.Devices) > 0 {
+			st.Devices, st.Radios, st.Satellites = prev.Devices, prev.Radios, prev.Satellites
+		}
 		p.commit(st)
 		return
 	}

@@ -64,6 +64,10 @@ int count_to_client(struct __sk_buff *skb) {
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > end)
         return TCX_NEXT;
+    if (eth->h_dest[0] & 0x01)
+        return TCX_NEXT;   // multicast/broadcast: not a device, would
+                           // invent phantom clients and evict real
+                           // ones from the LRU table
     struct dev_counters *c = counter_for(mac_key(eth->h_dest));
     if (c)
         __sync_fetch_and_add(&c->down, skb->len);

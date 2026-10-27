@@ -298,6 +298,8 @@ static __inline int tc_parse_l3(struct __sk_buff *skb, struct flow_key *k4,
         __u32 ihl = (__u32)ip->ihl * 4;
         if (ihl < 20 || p + ihl > end)
             return 0;
+        if (ip->frag_off & bpf_htons(0x1fff))
+            return 0;   // non-first fragment: no L4 header to parse
         k4->proto = ip->protocol;
         k4->saddr = dst_is_remote ? ip->daddr : ip->saddr;
         void *l4 = p + ihl;
@@ -325,7 +327,7 @@ static __inline int tc_parse_l3(struct __sk_buff *skb, struct flow_key *k4,
         if (nh == IPPROTO_TCP) {
             struct tcphdr *t = l4;
             if ((void *)(t + 1) > end)
-                return 6;
+                return 0;   // truncated: a zero-saddr key would pollute dl_arrive6
             __u16 src = t->source, dst = t->dest;   // fixed-offset reads
             if (l4out)
                 *l4out = l4;   // bounds-checked: a TCP header fits
@@ -333,7 +335,7 @@ static __inline int tc_parse_l3(struct __sk_buff *skb, struct flow_key *k4,
             *has_ports = 1;
         } else if (nh == IPPROTO_UDP) {
             if (l4 + 8 > end)
-                return 6;
+                return 0;   // truncated: a zero-saddr key would pollute dl_arrive6
             __u16 *u = l4;
             __u16 src = u[0], dst = u[1];
             k6->sport = dst_is_remote ? dst : src;
@@ -443,8 +445,10 @@ struct {
 } ts_track6 SEC(".maps");
 
 // Per-client RTT accumulators, same shape as the queue-delay record.
+// LRU so one spoofed/varying client set cannot exhaust the table and
+// freeze out real clients; userspace resyncs when counters reset.
 struct {
-    __uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 256);
     __type(key, __u64);              // client MAC, mac_key encoding
     __type(value, struct q_delay);
@@ -469,6 +473,8 @@ static __inline int tcp_tsopt(const struct tcphdr *t, void *end,
     __u32 kind = 0, rem = 0;
     #pragma unroll
     for (int i = 20; i < 60; i++) {
+        if (i >= opts_end)
+            break;                       // past declared options: payload
         if ((const void *)t + i + 1 > end)
             break;
         const __u8 b = ((const __u8 *)t)[i];

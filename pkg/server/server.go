@@ -72,6 +72,7 @@ type Server struct {
 	wanbpfMu     sync.RWMutex
 	wanbpfSnap   *wanbpf.Snapshot
 	wanbpfHist   *wanbpfRing // minute-resolution latency history for Trends
+	wanbpfAgg    *wanbpfAgg  // 5 s → 1 min accumulator, poller-owned
 	wan          *wan.Poller
 	sys          *sysmon.Pollers
 	orbi         *orbi.Poller
@@ -254,7 +255,6 @@ func (s *Server) EnableWANBPF(spec string) error {
 	go func() {
 		t := time.NewTicker(5 * time.Second)
 		defer t.Stop()
-		ticks := 0
 		for range t.C {
 			snap, err := col.Read()
 			if err != nil {
@@ -264,10 +264,9 @@ func (s *Server) EnableWANBPF(spec string) error {
 			s.wanbpfMu.Lock()
 			s.wanbpfSnap = snap
 			s.wanbpfMu.Unlock()
-			// One sample per minute into the 24 h Trends ring.
-			if ticks++; ticks%12 == 0 {
-				s.recordWanbpfHistory(snap)
-			}
+			// Fold this window into the minute aggregate for the
+			// 24 h Trends ring.
+			s.sampleWanbpf(snap)
 		}
 	}()
 	s.app.Get("/api/wanbpf", func(c fiber.Ctx) error {
@@ -440,17 +439,7 @@ func (s *Server) handleAPIHistoryVM(c fiber.Ctx) error {
 	}
 
 	end := time.Now().Unix()
-	start := end
-	switch rng {
-	case "1h":
-		start = end - 3600
-	case "6h":
-		start = end - 6*3600
-	case "24h":
-		start = end - 24*3600
-	case "7d":
-		start = end - 7*24*3600
-	}
+	start := rangeStart(rng, end)
 	// Give rate() some history to chew on at the start of the window.
 	rateStart := start - 1800
 
@@ -458,10 +447,12 @@ func (s *Server) handleAPIHistoryVM(c fiber.Ctx) error {
 	queries := map[string]string{
 		// type="tx" is the interface-level counter (sqm="eth0"/"ifb4eth0").
 		"tx": fmt.Sprintf("sum by (sqm) (rate(collectd_sqm_bytes{type=\"tx\"}[%s]))", spec.rateLimit),
-		// Tin-level gauges live under sqm="eth0-tin-t0" etc.
-		"av": `max by (sqm) (collectd_sqm_gauge{type="avg_delay_us"}) / 1000`,
-		"pk": `max by (sqm) (collectd_sqm_gauge{type="peak_delay_us"}) / 1000`,
-		"dr": fmt.Sprintf("sum by (sqm) (rate(collectd_sqm_gauge{type=\"drops\"}[%s]))", spec.rateLimit),
+		// Tin-level gauges live under sqm="eth0-tin-t0" etc. Pin to t0:
+		// the router runs one tin per qdisc, and appending every tin's
+		// samples into one array shifts the positional zip below.
+		"av": `max by (sqm) (collectd_sqm_gauge{type="avg_delay_us",sqm=~".*-tin-t0"}) / 1000`,
+		"pk": `max by (sqm) (collectd_sqm_gauge{type="peak_delay_us",sqm=~".*-tin-t0"}) / 1000`,
+		"dr": fmt.Sprintf(`sum by (sqm) (rate(collectd_sqm_gauge{type="drops",sqm=~".*-tin-t0"}[%s]))`, spec.rateLimit),
 	}
 
 	type ifaceSeries struct {
@@ -637,7 +628,10 @@ func (s *Server) handleAPIClientHistory(c fiber.Ctx) error {
 			if grid == nil {
 				grid = sr.TS
 			}
-			for _, v := range sr.Val {
+			for i, v := range sr.Val {
+				if sr.TS[i] < start {
+					continue // rate() warmup before the window: exclude
+				}
 				total += v * spec.stepSeconds()
 			}
 		}
@@ -739,6 +733,8 @@ func (s *Server) handleAPIHistoryClients(c fiber.Ctx) error {
 		sum  float64
 	}
 	aggs := map[string]*agg{}
+	// The queries start 30 min early so rate() has history; only
+	// points inside the requested window count toward the totals.
 	for _, s := range rxSeries {
 		mac := s.Labels["mac"]
 		a := aggs[mac]
@@ -746,7 +742,10 @@ func (s *Server) handleAPIHistoryClients(c fiber.Ctx) error {
 			a = &agg{name: s.Labels["name"]}
 			aggs[mac] = a
 		}
-		for _, v := range s.Val {
+		for i, v := range s.Val {
+			if s.TS[i] < start {
+				continue
+			}
 			a.sum += v * spec.stepSeconds()
 		}
 	}
@@ -1224,16 +1223,14 @@ func rangeStart(rng string, end int64) int64 {
 	return end - 6*3600
 }
 
+// stepSeconds converts the spec's Prometheus-style step string to
+// seconds. Parsed, not switched: vmRanges carries steps (30s, 45s,
+// 90s, 1800s) that a fixed table would silently integrate at the
+// wrong interval, corrupting every bytes total built on it.
 func (r vmRangeSpec) stepSeconds() float64 {
-	switch r.step {
-	case "15s":
-		return 15
-	case "60s":
-		return 60
-	case "120s":
-		return 120
-	case "600s":
-		return 600
+	s := strings.TrimSuffix(r.step, "s")
+	if n, err := strconv.ParseFloat(s, 64); err == nil && n > 0 {
+		return n
 	}
 	return 60
 }
