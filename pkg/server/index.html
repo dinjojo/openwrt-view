@@ -1011,6 +1011,18 @@
         <div id="qdelay-meters" class="meters"></div>
         <div id="qdelay-hist" class="q-hist" aria-hidden="true"></div>
         <div id="qdelay-hist-lab" class="q-hist-lab hidden"><span>1 &micro;s</span><span>1 s</span></div>
+        <!-- Passive per-device RTT: each client's own TCP timestamps
+             (TSval on the LAN leg, echoed TSecr on the WAN leg) give the
+             path round-trip time of its real connections — no probes. -->
+        <div id="srtt-wrap" class="hidden">
+          <p class="sub" style="margin-top:var(--s4);margin-bottom:var(--s2)">Passive RTT per device &middot; from each connection&rsquo;s TCP timestamps &middot; 5 s window</p>
+          <div class="overflow-x-auto tbl-wrap"><table class="tbl" style="min-width:560px">
+            <thead><tr>
+              <th>Device</th><th class="r">Samples</th><th class="r">RTT now</th><th class="r">Avg</th><th class="r">Worst</th>
+            </tr></thead>
+            <tbody id="srtt-rows"></tbody>
+          </table></div>
+        </div>
       </section>
     </section>
 
@@ -2335,6 +2347,23 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       lab.classList.remove('hidden');
       lab.firstElementChild.textContent = ((1 << firstIdx) >= 1000 ? ((1 << firstIdx) / 1000) + ' ms' : (1 << firstIdx) + ' µs');
       lab.lastElementChild.textContent = ((1 << (lastIdx + 1)) >= 1000 ? ((1 << (lastIdx + 1)) / 1000) + ' ms' : (1 << (lastIdx + 1)) + ' µs');
+
+      // Per-device passive RTT, friendliest name first.
+      const swrap = document.getElementById('srtt-wrap');
+      const srows = document.getElementById('srtt-rows');
+      const srtt = (s.srtt || []).filter(r => r.count > 0);
+      if (!swrap) return;
+      if (!srtt.length) { swrap.classList.add('hidden'); return; }
+      swrap.classList.remove('hidden');
+      srows.innerHTML = srtt.map(r => {
+        const nm = knownName(r.mac) || r.mac;
+        return '<tr><td>' + h(nm) +
+          (nm !== r.mac ? ' <span class="xs muted">' + h(r.mac) + '</span>' : '') + '</td>' +
+          '<td class="r num">' + fmtNum(r.win_count || 0) + '</td>' +
+          '<td class="r num">' + (r.win_avg_ns ? fmtMs(r.win_avg_ns) : '–') + '</td>' +
+          '<td class="r num">' + fmtMs(r.avg_ns) + '</td>' +
+          '<td class="r num">' + (r.max_ns ? fmtMs(r.max_ns) : '–') + '</td></tr>';
+      }).join('');
     }
 
     /** System tab: WAN gate meters + router service ledger. */

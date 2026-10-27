@@ -42,11 +42,12 @@ type portBytes struct {
 }
 
 type linuxCollector struct {
-	mu    sync.Mutex
-	coll  *ebpf.Collection
-	links []link.Link
-	prevQ qDelayPerCPU         // last cumulative queue-delay read
-	prevP map[uint16]portBytes // last cumulative service read
+	mu       sync.Mutex
+	coll     *ebpf.Collection
+	links    []link.Link
+	prevQ    qDelayPerCPU         // last cumulative queue-delay read
+	prevP    map[uint16]portBytes // last cumulative service read
+	prevSrtt map[uint64]qDelayPerCPU
 }
 
 // Attach loads the compiled program and pins it to the given hooks. wan
@@ -72,7 +73,7 @@ func Attach(wan, ifb, lan string) (*Collector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load eBPF into kernel: %w", err)
 	}
-	lc := &linuxCollector{coll: coll, prevP: map[uint16]portBytes{}}
+	lc := &linuxCollector{coll: coll, prevP: map[uint16]portBytes{}, prevSrtt: map[uint64]qDelayPerCPU{}}
 	hooks := []string{}
 	attachErr := func(where string, err error) (*Collector, error) {
 		lc.close()
@@ -96,19 +97,21 @@ func Attach(wan, ifb, lan string) (*Collector, error) {
 		return attachErr("find "+wan, err)
 	}
 
-	// tc ingress on the WAN (arrival stamps — TC_ACT_PIPE keeps the
-	// classic clsact redirect running after us) and service accounting
-	// on the LAN bridge. collect_dl rides the LAN bridge's egress: the
-	// post-CAKE departure point every download passes through (the
-	// redirected skbs skip tc on the IFB itself).
+	// tc ingress on the WAN (arrival stamps + RTT echo collection —
+	// TCX_NEXT keeps the classic clsact redirect running after us) and
+	// service accounting on the LAN bridge. collect_dl rides the LAN
+	// bridge's egress: the post-CAKE departure point every download
+	// passes through (the redirected skbs skip tc on the IFB itself).
 	if idx, err := ifaceIndex(wan); err == nil {
-		l, err := link.AttachTCX(link.TCXOptions{
-			Interface: idx, Program: coll.Programs["stamp_dl"], Attach: ebpf.AttachTCXIngress,
-		})
-		if err != nil {
-			return attachErr("stamp_dl on "+wan, err)
+		for _, prog := range []string{"stamp_dl", "collect_rtt"} {
+			l, err := link.AttachTCX(link.TCXOptions{
+				Interface: idx, Program: coll.Programs[prog], Attach: ebpf.AttachTCXIngress,
+			})
+			if err != nil {
+				return attachErr(prog+" on "+wan, err)
+			}
+			lc.links = append(lc.links, l)
 		}
-		lc.links = append(lc.links, l)
 		hooks = append(hooks, "tc:"+wan)
 	} else {
 		return attachErr("find "+wan, err)
@@ -119,6 +122,7 @@ func Attach(wan, ifb, lan string) (*Collector, error) {
 			att  ebpf.AttachType
 		}{
 			{"collect_dl", ebpf.AttachTCXEgress},
+			{"stamp_ts", ebpf.AttachTCXIngress},
 			{"local_from_lan", ebpf.AttachTCXIngress},
 			{"local_to_lan", ebpf.AttachTCXEgress},
 		} {
@@ -267,6 +271,58 @@ func (lc *linuxCollector) read(hooks []string) (*Snapshot, error) {
 		}
 	}
 
+	// Per-client passive RTT (per-CPU hash keyed by MAC). Same
+	// windowed diff as the queue delay; the kernel's per-client max is
+	// reset after each read so each window reports its own worst RTT.
+	if m := lc.coll.Maps["srtt_hist"]; m != nil {
+		var (
+			mk   uint64
+			vals []qDelayPerCPU
+			iter = m.Iterate()
+		)
+		for iter.Next(&mk, &vals) {
+			var cur qDelayPerCPU
+			for _, v := range vals {
+				cur.Count += v.Count
+				cur.SumNs += v.SumNs
+				if v.MaxNs > cur.MaxNs {
+					cur.MaxNs = v.MaxNs
+				}
+				for i := range cur.Hist {
+					cur.Hist[i] += v.Hist[i]
+				}
+			}
+			prev := lc.prevSrtt[mk]
+			dc := cur.Count - min64(prev.Count, cur.Count)
+			if cur.Count < prev.Count { // counters reset (attach race): resync
+				dc = 0
+			}
+			r := DeviceRTT{Mac: macString(mk), Count: cur.Count}
+			if cur.Count > 0 {
+				r.AvgNs = cur.SumNs / cur.Count
+			}
+			r.MaxNs = cur.MaxNs
+			if dc > 0 {
+				r.WinCount = dc
+				r.WinAvgNs = (cur.SumNs - prev.SumNs) / dc
+			}
+			if r.WinCount > 0 || r.Count > 0 {
+				snap.Srtt = append(snap.Srtt, r)
+			}
+			lc.prevSrtt[mk] = cur
+			// Reset this client's max so the next window reports its
+			// own worst sample (same tiny race as the queue delay).
+			reset := vals
+			for i := range reset {
+				reset[i].MaxNs = 0
+			}
+			if err := m.Put(mk, reset); err != nil {
+				break
+			}
+		}
+		sortSrtt(snap.Srtt)
+	}
+
 	// Service bytes (LRU keyed by port; the BPF side stores the port's
 	// big-endian bytes, so decode explicitly).
 	snap.Services = []Service{}
@@ -304,6 +360,24 @@ func min64(a, b uint64) uint64 {
 		return a
 	}
 	return b
+}
+
+// macString renders the map key (MAC packed big-endian in the low 48
+// bits) back to its colon-separated form.
+func macString(k uint64) string {
+	b := []byte{byte(k >> 40), byte(k >> 32), byte(k >> 24), byte(k >> 16), byte(k >> 8), byte(k)}
+	return net.HardwareAddr(b).String()
+}
+
+// sortSrtt orders clients by windowed sample count, so the talkative
+// ones — the ones whose latency the household is actually feeling —
+// sit at the top.
+func sortSrtt(s []DeviceRTT) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j].WinCount > s[j-1].WinCount; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
 }
 
 // sortServices keeps the built-in ports in port order ahead of the rest.

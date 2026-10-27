@@ -6,6 +6,9 @@
 //   - per-packet download queue delay, measured as the time a packet
 //     spends between arriving on the WAN ingress and being dequeued by
 //     the CAKE ingress qdisc on the IFB mirror;
+//   - passive per-device round-trip times, measured from the TCP
+//     timestamps of each client's own connections (TSval on the LAN
+//     leg, echoed TSecver on the WAN leg — no probes);
 //   - router-local service accounting on the LAN bridge: bytes between
 //     clients and the router's own services (DNS, SSH, LuCI, …) keyed
 //     by service port.
@@ -39,14 +42,28 @@ type Service struct {
 // Snapshot is one read of all collectors. Queue stats are windowed
 // (between the two most recent reads); Wan stats are cumulative.
 type Snapshot struct {
-	Wan      WanStats  `json:"wan"`
-	QCount   uint64    `json:"q_count"`  // packets measured in the window
-	QAvgNs   uint64    `json:"q_avg_ns"` // windowed mean queue delay
-	QMaxNs   uint64    `json:"q_max_ns"` // windowed worst queue delay
-	Hist     []uint64  `json:"hist"`     // windowed log2-µs histogram
-	Services []Service `json:"services"` // one per observed service port
-	Hooks    []string  `json:"hooks"`    // attached hook names, for the UI
-	Stamp    int64     `json:"stamp_unix"`
+	Wan      WanStats    `json:"wan"`
+	QCount   uint64      `json:"q_count"`  // packets measured in the window
+	QAvgNs   uint64      `json:"q_avg_ns"` // windowed mean queue delay
+	QMaxNs   uint64      `json:"q_max_ns"` // windowed worst queue delay
+	Hist     []uint64    `json:"hist"`     // windowed log2-µs histogram
+	Srtt     []DeviceRTT `json:"srtt"`     // per-client passive TCP RTT, windowed
+	Services []Service   `json:"services"` // one per observed service port
+	Hooks    []string    `json:"hooks"`    // attached hook names, for the UI
+	Stamp    int64       `json:"stamp_unix"`
+}
+
+// DeviceRTT is one client's passive round-trip samples, measured from
+// its own TCP connections' timestamps (no probes). Count and AvgNs are
+// cumulative since attach; MaxNs and the Win fields cover the window
+// between the two most recent reads.
+type DeviceRTT struct {
+	Mac      string `json:"mac"`        // client MAC, colon-separated
+	Count    uint64 `json:"count"`      // samples since attach
+	AvgNs    uint64 `json:"avg_ns"`     // cumulative mean
+	MaxNs    uint64 `json:"max_ns"`     // worst sample in the window
+	WinCount uint64 `json:"win_count"`  // samples in the window
+	WinAvgNs uint64 `json:"win_avg_ns"` // windowed mean
 }
 
 // Collector owns the loaded eBPF objects and their attachments. The

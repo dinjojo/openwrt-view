@@ -1,17 +1,22 @@
-// WAN-side eBPF collectors for openwrt-view. Five programs, one object:
+// WAN-side eBPF collectors for openwrt-view. Seven programs, one object:
 //
 //   xdp_wan_gate    (XDP, WAN ingress)  packet/byte totals, spoof-source
 //                   observation, and a per-source SYN rate limit (port-scan
 //                   dampening) — runs before the kernel builds an skb.
 //   stamp_dl        (tc, WAN ingress)   timestamp inbound download flows
-//                   into an LRU keyed by the IP 5-tuple; the arrival half
-//                   of the download queue-delay measurement.
+//                   into an LRU keyed by the remote endpoint; the arrival
+//                   half of the download queue-delay measurement.
 //   collect_dl      (tc, LAN egress)    the same flow departs to the client
 //                   here, AFTER the CAKE ingress qdisc has dequeued it on
 //                   the IFB mirror; the difference of the two stamps is
 //                   the real queue wait. (Redirected skbs skip tc on the
 //                   IFB itself, so the departure must be observed on the
 //                   LAN bridge.)
+//   stamp_ts        (tc, LAN ingress)   remember each client's latest TCP
+//                   TSval per server endpoint, with the client's MAC.
+//   collect_rtt     (tc, WAN ingress)   the server's ACK echoes that TSval
+//                   back; matching echo → per-client round-trip sample,
+//                   no probes.
 //   local_from_lan  (tc, LAN ingress)   bytes from clients into router
 //                   services, keyed by the destination port.
 //   local_to_lan    (tc, LAN egress)    bytes from router services back to
@@ -250,11 +255,14 @@ struct {
 // source port). NAT rewrites the local side between the WAN and LAN
 // legs, but the server's address and port survive untouched, so the
 // arrival stamp (WAN ingress) and the departure (LAN egress) share the
-// same key. Two clients downloading from the same server endpoint
-// collide on one key; the stale-window check keeps those samples out.
-// Returns the L3 protocol family (4, 6, or 0) on success.
+// same key. dst_is_remote selects which side of the packet names the
+// remote endpoint: 0 for WAN-facing legs (server → client, remote is
+// the source) and 1 for the client's outbound leg (remote is the
+// destination). l4out receives the L4 header pointer when ports were
+// parsed. Returns the L3 protocol family (4, 6, or 0) on success.
 static __inline int tc_parse_l3(struct __sk_buff *skb, struct flow_key *k4,
-                                struct flow_key6 *k6, __u8 *has_ports) {
+                                struct flow_key6 *k6, __u8 *has_ports,
+                                int dst_is_remote, void **l4out) {
     void *data = (void *)(long)skb->data;
     void *end = (void *)(long)skb->data_end;
     struct ethhdr *eth = data;
@@ -291,15 +299,19 @@ static __inline int tc_parse_l3(struct __sk_buff *skb, struct flow_key *k4,
         if (ihl < 20 || p + ihl > end)
             return 0;
         k4->proto = ip->protocol;
-        k4->saddr = ip->saddr;   // remote endpoint only; NAT rewrites daddr/dport
+        k4->saddr = dst_is_remote ? ip->daddr : ip->saddr;
         void *l4 = p + ihl;
         if (ip->protocol == IPPROTO_TCP && l4 + 20 <= end) {
             struct tcphdr *t = l4;
-            k4->sport = t->source;
+            __u16 src = t->source, dst = t->dest;   // fixed-offset reads
+            if (l4out)
+                *l4out = l4;   // bounds-checked: a TCP header fits
+            k4->sport = dst_is_remote ? dst : src;
             *has_ports = 1;
         } else if (ip->protocol == IPPROTO_UDP && l4 + 8 <= end) {
             __u16 *u = l4;
-            k4->sport = u[0];
+            __u16 src = u[0], dst = u[1];
+            k4->sport = dst_is_remote ? dst : src;
             *has_ports = 1;
         }
         return 4;
@@ -308,18 +320,27 @@ static __inline int tc_parse_l3(struct __sk_buff *skb, struct flow_key *k4,
         struct ipv6hdr *ip6 = p;
         if ((void *)(ip6 + 1) > end)
             return 0;
-        __builtin_memcpy(k6->saddr, ip6->saddr.s6_addr, 16);
-        k6->proto = ip6->nexthdr;
         void *l4 = (void *)(ip6 + 1);
-        if (ip6->nexthdr == IPPROTO_TCP && l4 + 20 <= end) {
+        __u8 nh = ip6->nexthdr;
+        if (nh == IPPROTO_TCP) {
             struct tcphdr *t = l4;
-            k6->sport = t->source;
+            if ((void *)(t + 1) > end)
+                return 6;
+            __u16 src = t->source, dst = t->dest;   // fixed-offset reads
+            if (l4out)
+                *l4out = l4;   // bounds-checked: a TCP header fits
+            k6->sport = dst_is_remote ? dst : src;
             *has_ports = 1;
-        } else if (ip6->nexthdr == IPPROTO_UDP && l4 + 8 <= end) {
+        } else if (nh == IPPROTO_UDP) {
+            if (l4 + 8 > end)
+                return 6;
             __u16 *u = l4;
-            k6->sport = u[0];
+            __u16 src = u[0], dst = u[1];
+            k6->sport = dst_is_remote ? dst : src;
             *has_ports = 1;
         }
+        __builtin_memcpy(k6->saddr, dst_is_remote ? ip6->daddr.s6_addr : ip6->saddr.s6_addr, 16);
+        k6->proto = nh;
         return 6;
     }
     return 0;
@@ -330,7 +351,7 @@ int stamp_dl(struct __sk_buff *skb) {
     struct flow_key k4 = {};
     struct flow_key6 k6 = {};
     __u8 has_ports = 0;
-    __u8 fam = (__u8)tc_parse_l3(skb, &k4, &k6, &has_ports);
+    __u8 fam = (__u8)tc_parse_l3(skb, &k4, &k6, &has_ports, 0, NULL);
     __u64 now = bpf_ktime_get_ns();
     if (fam == 4)
         bpf_map_update_elem(&dl_arrive4, &k4, &now, BPF_ANY);
@@ -344,7 +365,7 @@ int collect_dl(struct __sk_buff *skb) {
     struct flow_key k4 = {};
     struct flow_key6 k6 = {};
     __u8 has_ports = 0;
-    __u8 fam = (__u8)tc_parse_l3(skb, &k4, &k6, &has_ports);
+    __u8 fam = (__u8)tc_parse_l3(skb, &k4, &k6, &has_ports, 0, NULL);
     __u64 now = bpf_ktime_get_ns();
     __u64 *t0 = fam == 4 ? bpf_map_lookup_elem(&dl_arrive4, &k4)
               : fam == 6 ? bpf_map_lookup_elem(&dl_arrive6, &k6) : 0;
@@ -359,6 +380,200 @@ int collect_dl(struct __sk_buff *skb) {
     struct q_delay *q = bpf_map_lookup_elem(&q_delay, &zero);
     if (!q)
         return TCX_NEXT;
+    __u64 us = delta >> 10;
+    __u32 idx = 0;
+    for (__u32 v = (__u32)us; v > 1 && idx < 31; v >>= 1)
+        idx++;
+    q->hist[idx]++;
+    q->count++;
+    q->sum_ns += delta;
+    if (delta > q->max_ns)
+        q->max_ns = delta;
+    return TCX_NEXT;
+}
+
+// ── Passive per-device RTT from TCP timestamps ──────────────────────────
+//
+// Every modern TCP stack stamps its segments with a TSval and the peer
+// echoes that value back in TSecver. Both sides are visible to tc
+// hooks on this router, so the kernel itself can time the round trip
+// of each client's connections with no probes:
+//
+//   stamp_ts    (tc, LAN ingress)  the client's segment carries TSval;
+//                                  remember (server endpoint → TSval,
+//                                  wall time, client MAC)
+//   collect_rtt (tc, WAN ingress)  the server's ACK echoes TSecver;
+//                                  when it matches the remembered
+//                                  TSval, RTT = now − that wall time
+//
+// Both hooks run before netfilter, so the server endpoint looks the
+// same on both legs (NAT rewrites only the local side) — the same
+// property the queue-delay keys rely on. The RTT lands in a per-client
+// MAC histogram. Delayed ACKs make the peer echo an older TSval; those
+// echoes simply fail the match and are skipped, so the samples skew
+// toward interactive request/response traffic — the traffic where RTT
+// is actually felt.
+
+// mac_key packs a MAC big-endian in the low 48 bits so keys print
+// naturally (same encoding as the ebpfacct counters).
+static __inline __u64 mac_key(const unsigned char *mac) {
+    return ((__u64)mac[0] << 40) | ((__u64)mac[1] << 32) | ((__u64)mac[2] << 24) |
+           ((__u64)mac[3] << 16) | ((__u64)mac[4] << 8) | (__u64)mac[5];
+}
+
+struct ts_track {
+    __u32 tsval;   // client's latest TSval on this flow
+    __u32 pad;
+    __u64 ktime;   // when that TSval left the LAN
+    __u64 mac;     // owning client, mac_key encoding
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 8192);
+    __type(key, struct flow_key);    // remote (server) endpoint
+    __type(value, struct ts_track);
+} ts_track4 SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 8192);
+    __type(key, struct flow_key6);
+    __type(value, struct ts_track);
+} ts_track6 SEC(".maps");
+
+// Per-client RTT accumulators, same shape as the queue-delay record.
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+    __uint(max_entries, 256);
+    __type(key, __u64);              // client MAC, mac_key encoding
+    __type(value, struct q_delay);
+} srtt_hist SEC(".maps");
+
+// tcp_tsopt scans the TCP options for the timestamp option (kind 8).
+// Returns 1 with tsval/tsecver filled, 0 if absent or unparseable. The
+// caller has proven a full 20-byte TCP header fits. The scan is a
+// fully unrolled byte state machine: after unrolling, every packet
+// read is at a compile-time constant offset with its own end-relative
+// bounds check, which is the only shape the verifier accepts without
+// fighting the compiler's loop transforms. Options are at most 40
+// bytes, so 40 steps cover them.
+static __inline int tcp_tsopt(const struct tcphdr *t, void *end,
+                              __u32 *tsval_out, __u32 *tsecver_out) {
+    __u32 doff = ((const __u8 *)t)[12] >> 4;   // header length in words
+    __u32 opts_end = doff << 2;
+    if (opts_end < 20 || opts_end > 60)
+        return 0;
+    __u32 tsval = 0, tsecver = 0;
+    __u32 st = 0;    // 0 expect kind, 1 expect len, 2..9 inside TS, 10 skip
+    __u32 kind = 0, rem = 0;
+    #pragma unroll
+    for (int i = 20; i < 60; i++) {
+        if ((const void *)t + i + 1 > end)
+            break;
+        const __u8 b = ((const __u8 *)t)[i];
+        if (st == 0) {
+            if (b == 0)
+                break;                       // end of options
+            if (b == 1)
+                continue;                    // NOP
+            kind = b;
+            st = 1;
+        } else if (st == 1) {
+            if (b < 2)
+                break;                       // malformed
+            if (kind == 8 && b != 10)
+                break;                       // TS option with wrong length
+            if (kind == 8) {
+                st = 2;                      // 8 TS data bytes follow
+            } else {
+                rem = b - 2;                 // bytes of a non-TS option
+                st = rem ? 10 : 0;
+            }
+        } else if (st >= 2 && st <= 9) {
+            if (st < 6)
+                tsval |= (__u32)b << (8 * (5 - st));
+            else
+                tsecver |= (__u32)b << (8 * (9 - st));
+            st++;
+            if (st == 10) {
+                *tsval_out = tsval;
+                *tsecver_out = tsecver;
+                return 1;
+            }
+        } else {                             // skipping a foreign option
+            rem--;
+            if (!rem)
+                st = 0;
+        }
+    }
+    return 0;
+}
+
+SEC("tc/ingress")
+int stamp_ts(struct __sk_buff *skb) {
+    void *data = (void *)(long)skb->data;
+    void *end = (void *)(long)skb->data_end;
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > end)
+        return TCX_NEXT;
+    struct flow_key k4 = {};
+    struct flow_key6 k6 = {};
+    __u8 has_ports = 0;
+    void *l4 = NULL;
+    __u8 fam = (__u8)tc_parse_l3(skb, &k4, &k6, &has_ports, 1, &l4);
+    if (!fam || !has_ports || !l4 || (fam == 4 && k4.proto != IPPROTO_TCP) ||
+        (fam == 6 && k6.proto != IPPROTO_TCP))
+        return TCX_NEXT;
+    if (l4 + 20 > (void *)(long)skb->data_end)
+        return TCX_NEXT;   // re-prove the header fits at the point of use
+    __u32 tsval = 0, tsecver = 0;
+    if (!tcp_tsopt(l4, (void *)(long)skb->data_end, &tsval, &tsecver) || !tsval)
+        return TCX_NEXT;
+    struct ts_track tr = {
+        .tsval = tsval,
+        .ktime = bpf_ktime_get_ns(),
+        .mac = mac_key(eth->h_source),
+    };
+    if (fam == 4)
+        bpf_map_update_elem(&ts_track4, &k4, &tr, BPF_ANY);
+    else
+        bpf_map_update_elem(&ts_track6, &k6, &tr, BPF_ANY);
+    return TCX_NEXT;
+}
+
+SEC("tc/ingress")
+int collect_rtt(struct __sk_buff *skb) {
+    struct flow_key k4 = {};
+    struct flow_key6 k6 = {};
+    __u8 has_ports = 0;
+    void *l4 = NULL;
+    __u8 fam = (__u8)tc_parse_l3(skb, &k4, &k6, &has_ports, 0, &l4);
+    if (!fam || !has_ports || !l4 || (fam == 4 && k4.proto != IPPROTO_TCP) ||
+        (fam == 6 && k6.proto != IPPROTO_TCP))
+        return TCX_NEXT;
+    if (l4 + 20 > (void *)(long)skb->data_end)
+        return TCX_NEXT;   // re-prove the header fits at the point of use
+    __u32 tsval = 0, tsecver = 0;
+    if (!tcp_tsopt(l4, (void *)(long)skb->data_end, &tsval, &tsecver) || !tsecver)
+        return TCX_NEXT;
+    struct ts_track *tr = fam == 4
+                        ? bpf_map_lookup_elem(&ts_track4, &k4)
+                        : bpf_map_lookup_elem(&ts_track6, &k6);
+    if (!tr || tr->tsval != tsecver)
+        return TCX_NEXT;                    // delayed ACK echoed an older TSval
+    __u64 delta = bpf_ktime_get_ns() - tr->ktime;
+    if (delta == 0 || delta > STALE_NS)
+        return TCX_NEXT;
+    struct q_delay *q = bpf_map_lookup_elem(&srtt_hist, &tr->mac);
+    if (!q) {
+        struct q_delay zero = {};
+        if (bpf_map_update_elem(&srtt_hist, &tr->mac, &zero, BPF_NOEXIST) != 0)
+            return TCX_NEXT;
+        q = bpf_map_lookup_elem(&srtt_hist, &tr->mac);
+        if (!q)
+            return TCX_NEXT;
+    }
     __u64 us = delta >> 10;
     __u32 idx = 0;
     for (__u32 v = (__u32)us; v > 1 && idx < 31; v >>= 1)
