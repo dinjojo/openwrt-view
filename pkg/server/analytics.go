@@ -152,8 +152,15 @@ func (s *Server) handleAPIIncidents(c fiber.Ctx) error {
 	// Passive detector at 24h/7d only: at 30 d the range step would
 	// average the 60 s samples together and the consecutive-sample rule
 	// would silently stop working.
+	// The lookback inside bufferingEpisodes hands us whole episodes,
+	// including heads from before the window; keep the ones that were
+	// still ongoing inside it and drop fully-pre-window ones.
 	eps, _, _ := s.bufferingEpisodes(ctx, start, end, rng != "30d")
-	rep.addEpisodes(eps)
+	for _, ep := range eps {
+		if ep.End >= start {
+			rep.addEpisodes([]Incident{ep})
+		}
+	}
 
 	sort.Slice(rep.Episodes, func(i, j int) bool { return rep.Episodes[i].Start > rep.Episodes[j].Start })
 	rep.Count = len(rep.Episodes)
@@ -184,16 +191,27 @@ func (r *IncidentReport) addEpisodes(eps []Incident) {
 // number of raw probe samples seen (0 = no probe coverage); err is set
 // only when the probe data could not be read at all.
 func (s *Server) bufferingEpisodes(ctx context.Context, start, end int64, passive bool) (eps []Incident, probeSamples int, err error) {
+	// Query a lookback before the window: an episode straddling the
+	// boundary (e.g. midnight in the daily report) must be found whole
+	// and attributed to the window that owns its start. Without this,
+	// the daily report — queried day by day — counts one midnight-
+	// spanning episode once per day it touches. Callers filter on
+	// Start, so the pre-window head lands in the owning day.
+	from := start - probeMaxGap
 	failed := 0
 	for _, d := range []struct{ label, name string }{{"down", "download"}, {"up", "upload"}} {
-		series, qerr := s.vmc.QueryRaw(ctx, `probe_bloat_ms{direction="`+d.label+`"}`, start, end)
+		series, qerr := s.vmc.QueryRaw(ctx, `probe_bloat_ms{direction="`+d.label+`"}`, from, end)
 		if qerr != nil {
 			failed++
 			err = qerr
 			continue
 		}
 		for _, se := range series {
-			probeSamples += len(se.TS)
+			for _, ts := range se.TS {
+				if ts >= start { // only in-window runs count as coverage
+					probeSamples++
+				}
+			}
 			eps = append(eps, probeEpisodes(se, d.name, s.loc)...)
 		}
 	}
@@ -201,7 +219,7 @@ func (s *Server) bufferingEpisodes(ctx context.Context, start, end int64, passiv
 		err = nil
 	}
 	if passive {
-		eps = append(eps, s.passiveEpisodes(ctx, start, end)...)
+		eps = append(eps, s.passiveEpisodes(ctx, from, end)...)
 	}
 	return eps, probeSamples, err
 }
@@ -294,8 +312,9 @@ func (s *Server) passiveEpisodes(ctx context.Context, start, end int64) []Incide
 	if errRx != nil || errTx != nil || len(rx) == 0 || len(tx) == 0 {
 		return nil
 	}
-	shaped := s.shapedBitsPerS()
-	if shaped <= 0 {
+	shapedDown := s.shapedBitsPerS("ifb4eth0") // ingress mirror shapes download
+	shapedUp := s.shapedBitsPerS("eth0")       // WAN egress shapes upload
+	if shapedDown <= 0 || shapedUp <= 0 {
 		return nil
 	}
 
@@ -303,10 +322,10 @@ func (s *Server) passiveEpisodes(ctx context.Context, start, end int64) []Incide
 	rxs, txs := rx[0], tx[0]
 	utilAt := map[int64]float64{}
 	for i, ts := range rxs.TS {
-		utilAt[ts] = rxs.Val[i] * 8 / shaped * 100
+		utilAt[ts] = rxs.Val[i] * 8 / shapedDown * 100
 	}
 	for i, ts := range txs.TS {
-		if u := txs.Val[i] * 8 / shaped * 100; u > utilAt[ts] {
+		if u := txs.Val[i] * 8 / shapedUp * 100; u > utilAt[ts] {
 			utilAt[ts] = u
 		}
 	}
@@ -382,15 +401,30 @@ func rxValAt(se vm.Series, ts int64) float64 {
 	return -1
 }
 
-// shapedBitsPerS reads the configured shaper rate from the live CAKE
-// snapshot (falling back to 415 Mbit — the configured rate here).
-func (s *Server) shapedBitsPerS() float64 {
+// shapedBitsPerS reads the configured shaper rate for one direction
+// from the live CAKE snapshot. The download shape lives on the ingress
+// mirror (ifb4eth0), the upload shape on WAN egress (eth0); with
+// asymmetric rates the direction matters — utilisation is per direction.
+// Falls back to any shaped interface's rate, then to 415 Mbit — the
+// configured rate here.
+func (s *Server) shapedBitsPerS(iface string) float64 {
 	s.statsMu.RLock()
 	defer s.statsMu.RUnlock()
+	fallback := 0.0
 	for _, cs := range s.stats {
-		if b := parseBandwidth(cs.Bandwidth); b > 0 {
+		b := parseBandwidth(cs.Bandwidth)
+		if b <= 0 {
+			continue
+		}
+		if cs.Interface == iface {
 			return b
 		}
+		if fallback == 0 {
+			fallback = b
+		}
+	}
+	if fallback > 0 {
+		return fallback
 	}
 	return 415e6
 }

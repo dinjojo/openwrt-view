@@ -310,7 +310,7 @@ func TestAddTrends(t *testing.T) {
 		inst(lbl("ping", "1.1.1.1"), 10), inst(lbl("ping", "8.8.8.8"), 15)}
 	f.instant[q(`count_over_time(collectd_ping%s)`)] = []vmSeries{
 		inst(lbl("ping", "1.1.1.1"), 500), inst(lbl("ping", "8.8.8.8"), 700)}
-	f.instant[q(`avg_over_time(collectd_ping_ping_stddev%s)`)] = []vmSeries{inst(nil, 2.5)}
+	f.instant[q(`avg(avg_over_time(collectd_ping_ping_stddev%s))`)] = []vmSeries{inst(nil, 2.5)}
 
 	// Shaper: upload has throughput + ceiling; download has only a ceiling.
 	upTx := []float64{100e6, 200e6, 300e6, 380e6, 390e6}

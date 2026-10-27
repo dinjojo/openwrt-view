@@ -5063,9 +5063,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
 
     function ovBytes(b) {
       if (b == null || isNaN(b)) return '–';
-      if (b >= 1024 ** 3) return (b / 1024 ** 3).toFixed(1) + ' GB';
-      if (b >= 1024 ** 2) return (b / 1024 ** 2).toFixed(0) + ' MB';
-      return (b / 1024).toFixed(0) + ' KB';
+      return fmtBytes(b);   // decimal, same convention as every other byte figure here
     }
 
     function renderOverview() {

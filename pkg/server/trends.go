@@ -256,11 +256,11 @@ func (s *Server) addTrends(ctx context.Context, out *PercentileReport, w trendWi
 		}
 		return tr.Latency[i].Name < tr.Latency[j].Name
 	})
+	// Stddev of the ping probe across all targets, not just whichever
+	// target's series happens to sort last.
 	if se, err := s.vmc.Query(ctx,
-		fmt.Sprintf(`avg_over_time(collectd_ping_ping_stddev%s)`, w.sel())); err == nil {
-		for _, pt := range se {
-			tr.Stddev = pt.Val
-		}
+		fmt.Sprintf(`avg(avg_over_time(collectd_ping_ping_stddev%s))`, w.sel())); err == nil && len(se) > 0 {
+		tr.Stddev = se[0].Val
 	}
 
 	// ── Shaper utilisation per direction ─────────────────────────────

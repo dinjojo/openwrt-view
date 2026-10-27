@@ -114,24 +114,21 @@ func parseText(raw []byte) []types.CakeStats {
 	}
 
 	// Phase 2: identify qdisc blocks.
-	var blocks [32]blockRange
-	nBlocks := 0
+	// Slices, not fixed arrays: a router with many ifaces (plus cake_mq
+	// sub-queues) overflows a fixed cap and silently drops qdiscs.
+	blocks := make([]blockRange, 0, 32)
 	blockStart := 0
 	for i := 0; i < nLines; i++ {
 		s := lineStr(i)
 		if len(s) >= 6 && s[:6] == "qdisc " && i > blockStart {
 			// End of previous block.
-			if nBlocks < len(blocks) {
-				blocks[nBlocks] = blockRange{blockStart, i}
-				nBlocks++
-			}
+			blocks = append(blocks, blockRange{blockStart, i})
 			blockStart = i
 		}
 	}
 	// Last block.
 	if blockStart < nLines {
-		blocks[nBlocks] = blockRange{blockStart, nLines}
-		nBlocks++
+		blocks = append(blocks, blockRange{blockStart, nLines})
 	}
 
 	// Phase 3: parse each block into a blockResult.
@@ -143,11 +140,10 @@ func parseText(raw []byte) []types.CakeStats {
 		isCakeMQ     bool
 	}
 
-	var parsed [16]blockResult
-	nParsed := 0
+	parsed := make([]blockResult, 0, 16)
 
 	var tok util.FieldTokenizer
-	for bi := 0; bi < nBlocks; bi++ {
+	for bi := 0; bi < len(blocks); bi++ {
 		b := blocks[bi]
 
 		// Get the full first line (header) by assembling raw bytes.
@@ -173,27 +169,24 @@ func parseText(raw []byte) []types.CakeStats {
 			parentHandle = headerParentHandle(header, &tok)
 		}
 
-		if ok && nParsed < len(parsed) {
-			parsed[nParsed] = blockResult{cs, parentHandle, isCakeMQ}
-			nParsed++
+		if ok {
+			parsed = append(parsed, blockResult{cs, parentHandle, isCakeMQ})
 		}
 	}
 
 	// Phase 4: build cake_mq parent lookup (linear scan, small n).
-	var mqKeys [16]ifaceHandle
-	var mqVals [16]types.CakeStats
-	nMQ := 0
-	for i := 0; i < nParsed; i++ {
+	mqKeys := make([]ifaceHandle, 0, 16)
+	mqVals := make([]types.CakeStats, 0, 16)
+	for i := range parsed {
 		r := &parsed[i]
 		if r.isCakeMQ {
-			mqKeys[nMQ] = ifaceHandle{r.cs.Interface, r.cs.Handle}
-			mqVals[nMQ] = r.cs
-			nMQ++
+			mqKeys = append(mqKeys, ifaceHandle{r.cs.Interface, r.cs.Handle})
+			mqVals = append(mqVals, r.cs)
 		}
 	}
 
 	mqLookup := func(key ifaceHandle) (types.CakeStats, bool) {
-		for i := 0; i < nMQ; i++ {
+		for i := range mqKeys {
 			if mqKeys[i] == key {
 				return mqVals[i], true
 			}
@@ -202,38 +195,29 @@ func parseText(raw []byte) []types.CakeStats {
 	}
 
 	// Phase 5: group sub-queues under their cake_mq parent.
-	// We use flat arrays with small limits.
 	type subGroup struct {
 		key  ifaceHandle
-		subs [16]types.CakeStats
-		n    int
+		subs []types.CakeStats
 	}
-	var groups [8]subGroup
-	nGroups := 0
+	groups := make([]subGroup, 0, 8)
 
 	groupFor := func(key ifaceHandle) *subGroup {
-		for i := 0; i < nGroups; i++ {
+		for i := range groups {
 			if groups[i].key == key {
 				return &groups[i]
 			}
 		}
-		if nGroups < len(groups) {
-			g := &groups[nGroups]
-			g.key = key
-			nGroups++
-			return g
-		}
-		return nil
+		groups = append(groups, subGroup{key: key})
+		return &groups[len(groups)-1]
 	}
 
-	for i := 0; i < nParsed; i++ {
+	for i := range parsed {
 		r := &parsed[i]
 		if !r.isCakeMQ && r.parentHandle != "" {
 			key := ifaceHandle{r.cs.Interface, r.parentHandle}
 			if _, ok := mqLookup(key); ok {
-				if g := groupFor(key); g != nil && g.n < len(g.subs) {
-					g.subs[g.n] = r.cs
-					g.n++
+				if g := groupFor(key); g != nil {
+					g.subs = append(g.subs, r.cs)
 				}
 			}
 		}
@@ -241,11 +225,10 @@ func parseText(raw []byte) []types.CakeStats {
 
 	// Phase 6: emit results in original order.
 	var result types.CakeStats
-	resultArr := make([]types.CakeStats, 0, nParsed)
-	var emitted [16]ifaceHandle
-	nEmitted := 0
+	resultArr := make([]types.CakeStats, 0, len(parsed))
+	var emitted []ifaceHandle
 	wasEmitted := func(key ifaceHandle) bool {
-		for i := 0; i < nEmitted; i++ {
+		for i := range emitted {
 			if emitted[i] == key {
 				return true
 			}
@@ -253,7 +236,7 @@ func parseText(raw []byte) []types.CakeStats {
 		return false
 	}
 
-	for i := 0; i < nParsed; i++ {
+	for i := range parsed {
 		r := &parsed[i]
 
 		switch {
@@ -262,12 +245,11 @@ func parseText(raw []byte) []types.CakeStats {
 			if wasEmitted(key) {
 				continue
 			}
-			emitted[nEmitted] = key
-			nEmitted++
+			emitted = append(emitted, key)
 
 			// Find sub-queues for this parent.
-			if g := groupFor(key); g != nil && g.n > 0 {
-				result = aggregateCakeMQSubQueues(r.cs, g.subs[:g.n])
+			if g := groupFor(key); g != nil && len(g.subs) > 0 {
+				result = aggregateCakeMQSubQueues(r.cs, g.subs)
 			} else {
 				result = r.cs
 			}
