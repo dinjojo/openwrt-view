@@ -20,11 +20,31 @@ type Counters struct {
 	Tx uint64
 }
 
+// DestCounters is one destination prefix's cumulative byte count for one
+// device: Up = client → remote, Down = remote → client. Monotonic;
+// consumers diff across polls.
+type DestCounters struct {
+	Up   uint64
+	Down uint64
+}
+
+// DestKey identifies one device-destination pair: the client's MAC in
+// colon-separated form and the destination's /24 (IPv4) or /48 (IPv6)
+// prefix as text, e.g. "34.54.147.0/24". Only internet destinations
+// appear — LAN-, router- and multicast-bound traffic is filtered in the
+// kernel program.
+type DestKey struct {
+	Mac    string
+	Prefix string
+	Fam    int // 4 or 6
+}
+
 // Collector owns the loaded eBPF objects and their TC attachments.
 // The implementation is platform-specific (see attach_linux.go).
 type Collector struct {
-	read  func() (map[string]Counters, error)
-	close func()
+	read      func() (map[string]Counters, error)
+	readDests func() (map[DestKey]DestCounters, error)
+	close     func()
 }
 
 // Read returns every device's cumulative byte counters keyed by MAC
@@ -34,6 +54,16 @@ func (c *Collector) Read() (map[string]Counters, error) {
 		return nil, ErrNotAttached
 	}
 	return c.read()
+}
+
+// ReadDests returns every device-destination pair's cumulative byte
+// counters. The kernel map is authoritative; on non-Linux or before a
+// successful attach it reports ErrNotAttached.
+func (c *Collector) ReadDests() (map[DestKey]DestCounters, error) {
+	if c == nil || c.readDests == nil {
+		return nil, ErrNotAttached
+	}
+	return c.readDests()
 }
 
 // Close detaches the TC hooks and unloads the program and map.

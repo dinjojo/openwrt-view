@@ -48,9 +48,9 @@ type Day struct {
 	Clients map[string]ClientDay `json:"clients"`
 }
 
-// keepDays is how long usage files are kept (queries go back 30 days; the
-// extra day supplies the baseline for the oldest queried day).
-const keepDays = 35
+// keepDays is how long usage files are kept (queries go back 400 days —
+// the Data Usage card's monthly chart — plus the baseline day).
+const keepDays = 401
 
 // Store reads and writes the usage files in one directory.
 type Store struct {

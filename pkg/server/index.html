@@ -333,6 +333,10 @@
     .ov-usage-row .nm { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); min-width: 0; }
     .ov-usage-row .gb { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
     .ov-usage-row .pc { color: var(--ink-2); min-width: 2.6rem; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    /* Data Usage card: Firewalla-style bottom-aligned bars. */
+    .du-bar { flex: 1 1 0; min-width: 4px; height: 100%; display: flex; align-items: flex-end; cursor: pointer; }
+    .du-bar i { display: block; width: 100%; background: color-mix(in srgb, var(--accent) 65%, transparent); border-radius: 2px 2px 0 0; }
+    .du-bar:hover i { background: var(--accent); }
 
     /* Applications: ECharts-style composition donut beside the trend
        chart. Hovering a slice thickens it and swaps the centre readout
@@ -852,6 +856,17 @@
             </div>
             <div id="ov-usage-legend" class="ov-usage-legend"></div>
           </div>
+          <!-- Daily / monthly totals with drill-down (Firewalla-style:
+               toggle the grain, click a month to see its days). -->
+          <div class="ov-du-head" style="display:flex;align-items:baseline;gap:8px;margin-top:var(--s4)">
+            <span class="chart-title" style="margin:0" id="du-title">Daily usage</span>
+            <span style="flex:1"></span>
+            <button id="du-days" class="intrange-btn du-btn on" data-du="days" role="button">Days</button>
+            <button id="du-months" class="intrange-btn du-btn" data-du="months" role="button">Months</button>
+          </div>
+          <div id="du-chart" style="display:flex;align-items:flex-end;gap:3px;height:64px;margin-top:6px"></div>
+          <div id="du-sub" class="xs muted" style="margin-top:6px"></div>
+          <p class="xs muted" style="margin-top:6px">Counters include Ethernet/PPPoE/IP headers — expect a few percent of divergence from your ISP&rsquo;s meter. The ISP&rsquo;s number is the standard.</p>
         </section>
 
         <section class="sect ov-card">
@@ -1306,6 +1321,9 @@
         <div id="clm-charts" class="charts" style="padding:var(--s5)"></div>
         <!-- Per-day usage from /api/usage; hidden when the endpoint is absent -->
         <div id="clm-usage" class="hidden" style="padding:0 var(--s5) var(--s5)"></div>
+        <!-- Today's top internet destinations for this device (eBPF
+             per-destination byte counters); hidden until data exists -->
+        <div id="clm-dests" class="hidden" style="padding:0 var(--s5) var(--s5)"></div>
         <!-- Per-application traffic for this device (netifyd DPI); hidden
              while netifyd is absent or has seen nothing from this MAC -->
         <div id="clm-apps" class="hidden" style="padding:0 var(--s5) var(--s5)"></div>
@@ -1500,6 +1518,38 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         'vector-effect="non-scaling-stroke"/>';
     }
 
+    /**
+     * Firewalla-style live sparkline: a smooth gradient-filled area over
+     * a zero baseline — no axes, no grid, just the shape of the traffic
+     * and the gradient that gives it weight. id names a <linearGradient>
+     * (one per card so refreshes don't fight).
+     */
+    function drawAreaSparkline(svg, data, color, gid) {
+      if (!svg) return;
+      if (!data || data.length < 2) { svg.innerHTML = ''; return; }
+      const W = 100, H = 28, PAD = 2;
+      const max = Math.max(...data, 1e-9);
+      const pts = data.map((v, i) =>
+        (PAD + (i / (data.length - 1)) * (W - 2 * PAD)).toFixed(1) + ',' +
+        (H - PAD - (v / max) * (H - 2 * PAD)).toFixed(1));
+      svg.innerHTML =
+        '<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">' +
+        '<stop offset="0%" stop-color="' + color + '" stop-opacity="0.45"/>' +
+        '<stop offset="100%" stop-color="' + color + '" stop-opacity="0.05"/>' +
+        '</linearGradient></defs>' +
+        '<polygon points="' + PAD + ',' + (H - PAD) + ' ' + pts.join(' ') + ' ' + (W - PAD) + ',' + (H - PAD) +
+        '" fill="url(#' + gid + ')"/>' +
+        '<polyline points="' + pts + '" fill="none" stroke="' + color +
+        '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" ' +
+        'vector-effect="non-scaling-stroke"/>';
+    }
+
+    // Live-throughput sparkline color by direction: the CAKE ingress
+    // mirror (ifb*) carries downloads, the WAN egress carries uploads —
+    // blue down, orange up, the same two-tone Firewalla uses.
+    const SPARK_DL = '#0069ff', SPARK_UL = '#f59e0b';
+    const sparkColor = iface => /ifb/i.test(iface) ? SPARK_DL : SPARK_UL;
+
     /** One KPI card: label, big value, sub-line, optional progress bar, optional sparkline. */
     function kpiCard(id, label, opts) {
       opts = opts || {};
@@ -1544,7 +1594,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       const lastPk = buf.pk[buf.pk.length - 1] || 0;
       const lastDr = buf.dr[buf.dr.length - 1] || 0;
 
-      drawSparkline(document.getElementById('spk-tx-' + name), buf.tx, 'var(--accent-ink)');
+      drawAreaSparkline(document.getElementById('spk-tx-' + name), buf.tx, sparkColor(name), 'g-spk-tx-' + name);
       drawSparkline(document.getElementById('spk-lat-' + name), buf.av, 'var(--ink-2)');
       drawSparkline(
         document.getElementById('spk-dr-' + name),
@@ -3529,10 +3579,13 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       document.getElementById('client-modal').style.display = 'flex';
       const us = document.getElementById('clm-usage');
       if (us) { us.classList.add('hidden'); us.innerHTML = ''; }
+      const de = document.getElementById('clm-dests');
+      if (de) { de.classList.add('hidden'); de.innerHTML = ''; }
       const ca = document.getElementById('clm-apps');
       if (ca) { ca.classList.add('hidden'); ca.innerHTML = ''; }
       requestAnimationFrame(loadClientModalHistory);
       loadClientUsage();
+      loadClientDests();
       loadApps(true);
       if (clModal.timer) clearInterval(clModal.timer);
       clModal.timer = setInterval(loadClientModalHistory, 60000);
@@ -3548,6 +3601,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (cd) cd.innerHTML = '';
       const us = document.getElementById('clm-usage');
       if (us) { us.classList.add('hidden'); us.innerHTML = ''; }
+      const de = document.getElementById('clm-dests');
+      if (de) { de.classList.add('hidden'); de.innerHTML = ''; }
       const ca = document.getElementById('clm-apps');
       if (ca) { ca.classList.add('hidden'); ca.innerHTML = ''; }
     }
@@ -3597,7 +3652,39 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
             bar(tx, 'var(--ul)') + '<span class="num right muted">' + (r.u ? fmtGB(tx) : '–') + '</span>' +
           '</div>';
         }).join('') + '</div>' +
-        '<div class="xs muted mt2"><span class="swatch dl"></span> downloaded<span class="sep">·</span><span class="swatch ul"></span> uploaded</div>';
+        '<div class="xs muted mt2"><span class="swatch dl"></span> downloaded<span class="sep">·</span><span class="swatch ul"></span> uploaded</div>' +
+        '<p class="xs muted mt2">Counters include Ethernet/PPPoE/IP headers — per-device totals read a few percent above an ISP-style meter that excludes (or includes) the same overhead. Always treat your ISP&rsquo;s number as the standard.</p>';
+      el.classList.remove('hidden');
+    }
+
+    // Today's top internet destinations for the open client, from the
+    // eBPF per-destination counters (/api/usage/dests). Hidden until the
+    // device has actually talked somewhere today.
+    async function loadClientDests() {
+      const mac = clModal.mac;
+      const el = document.getElementById('clm-dests');
+      if (!mac || !el) return;
+      let d = null;
+      try {
+        d = await fetch(appURL('/api/usage/dests')).then(r => r.ok ? r.json() : null);
+      } catch (_) { d = null; }
+      if (clModal.mac !== mac) return; // modal closed or switched meanwhile
+      if (!d || !d.clients) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+      const rows = d.clients[String(mac).toUpperCase()] || [];
+      if (!rows.length) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+      const head = '<div class="sect-head" style="border-top:1px solid var(--groove);padding-top:var(--s4)">' +
+        '<h3 class="h3">Top destinations <span class="normal muted sm">today, by volume</span></h3>' +
+        '<span class="sm muted">' + fmtGB(rows.reduce((a, r) => a + (r.total_gb || 0), 0)) + ' total</span></div>';
+      const max = Math.max(...rows.map(r => r.total_gb || 0), 1e-9);
+      el.innerHTML = head +
+        '<div class="stack">' + rows.map(r =>
+          '<div class="ubar">' +
+            '<span style="grid-row:span 2" class="muted" title="' + h(r.prefix) + '">' + h(r.prefix) + '</span>' +
+            '<div class="bar" style="margin:0"><i style="width:' +
+              Math.max(2, (r.total_gb || 0) / max * 100).toFixed(1) + '%;background:var(--dl)"></i></div>' +
+            '<span class="num right">↓ ' + fmtGB(r.rx_gb || 0) + ' · ↑ ' + fmtGB(r.tx_gb || 0) + '</span>' +
+          '</div>').join('') + '</div>' +
+        '<p class="xs muted mt2">Grouped by destination /24 (or /48 for IPv6) — enough to tell which service carried the traffic, not which exact server.</p>';
       el.classList.remove('hidden');
     }
 
@@ -5430,6 +5517,89 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       }).join('') || '<p class="lrow sm muted">nothing notable yet — quiet is good</p>';
     }
 
+    // ── Data usage: daily / monthly bars with drill-down ─────────────────
+    // Firewalla's Data Usage screen in miniature: one bar per day (or
+    // month), the grain toggled in the card head, a month click drills
+    // into its days. Data is the per-client daily files the server
+    // already persists; totals are all devices summed.
+    let duState = { grain: 'days', month: null }; // month = 'YYYY-MM' when drilled in
+    let duCache = null, duAt = 0;
+
+    async function loadUsageBars() {
+      if (!duCache || Date.now() - duAt > 300000) {
+        let d = null;
+        try {
+          d = await fetch(appURL('/api/usage?days=400')).then(r => r.ok ? r.json() : null);
+        } catch (_) { d = null; }
+        if (!d || !Array.isArray(d.days)) return;
+        duCache = d.days.filter(x => x.date);
+        duAt = Date.now();
+      }
+      renderUsageBars();
+    }
+
+    function duBars(rows) {
+      const max = Math.max(...rows.map(r => r.gb), 1e-9);
+      return rows.map(r =>
+        '<div class="du-bar" role="button" tabindex="0" data-du="' + h(r.key) + '" title="' + h(r.tip) + '">' +
+          '<i style="height:' + Math.max(r.gb > 0 ? 4 : 2, r.gb / max * 100).toFixed(0) + '%"></i>' +
+        '</div>').join('');
+    }
+
+    function renderUsageBars() {
+      const chart = document.getElementById('du-chart');
+      if (!chart || !duCache) return;
+      const title = document.getElementById('du-title');
+      const sub = document.getElementById('du-sub');
+      const tot = d => Object.values(d.clients || {}).reduce((a, c) => a + (c.rx_gb || 0) + (c.tx_gb || 0), 0);
+      const days = duCache.slice();
+      const gb1 = g => g >= 1 ? g.toFixed(1) + ' GB' : (g * 1024).toFixed(0) + ' MB';
+
+      if (duState.grain === 'days') {
+        const shown = duState.month ? days.filter(d => d.date.startsWith(duState.month)) : days.slice(-30);
+        const rows = shown.map(d => ({
+          key: d.date, gb: tot(d),
+          tip: d.date + ' · ' + gb1(tot(d)),
+        }));
+        chart.innerHTML = duBars(rows);
+        chart.querySelectorAll('.du-bar').forEach(b => b.onclick = null); // days don't drill deeper
+        const sum = rows.reduce((a, r) => a + r.gb, 0);
+        title.textContent = duState.month ? 'Daily usage · ' + duState.month : 'Daily usage';
+        sub.textContent = rows.length + ' days · ' + gb1(sum) + ' total · avg ' + gb1(sum / Math.max(1, rows.length)) + '/day';
+        return;
+      }
+      // Months: aggregate the day files by YYYY-MM.
+      const months = {};
+      days.forEach(d => {
+        const ym = d.date.slice(0, 7);
+        months[ym] = (months[ym] || 0) + tot(d);
+      });
+      const keys = Object.keys(months).sort();
+      const rows = keys.map(ym => ({ key: ym, gb: months[ym], tip: ym + ' · ' + gb1(months[ym]) + ' — click for days' }));
+      chart.innerHTML = duBars(rows);
+      chart.querySelectorAll('.du-bar').forEach(b => {
+        b.onclick = () => {
+          duState = { grain: 'days', month: b.dataset.du };
+          _setPillBtns('.du-btn', 'du', 'days');
+          renderUsageBars();
+        };
+      });
+      title.textContent = 'Monthly usage';
+      const vals = keys.map(k => months[k]);
+      sub.textContent = keys.length + ' months · avg ' + gb1(vals.reduce((a, v) => a + v, 0) / Math.max(1, vals.length)) + '/month';
+    }
+
+    document.getElementById('du-days').onclick = () => {
+      duState = { grain: 'days', month: null };
+      _setPillBtns('.du-btn', 'du', 'days');
+      renderUsageBars();
+    };
+    document.getElementById('du-months').onclick = () => {
+      duState = { grain: 'months', month: null };
+      _setPillBtns('.du-btn', 'du', 'months');
+      renderUsageBars();
+    };
+
     async function pollOverview() {
       try {
         const jobs = [
@@ -5441,6 +5611,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         }
         if (!ovUsageCache || Date.now() - ovUsageAt > 300000) {
           jobs.push(fetch(appURL('/api/usage')).then(r => r.json()).then(d => { ovUsageCache = d; ovUsageAt = Date.now(); }));
+          jobs.push(loadUsageBars());
         }
         const [cl, evs] = await Promise.all(jobs);
         if (Date.now() - orbiAt > 60000) loadOrbi(); // topology + AP rows

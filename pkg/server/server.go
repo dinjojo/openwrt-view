@@ -68,6 +68,7 @@ type Server struct {
 	clientStore  *clients.Store
 	netify       *netify.Collector   // netifyd DPI aggregates; nil unless the socket exists
 	ebpf         *ebpfacct.Collector // eBPF per-device counters; nil unless EnableEBPFAcct
+	destTrack    *destTrack          // per-device per-destination day totals; nil until the ebpf poller starts
 	wanbpf       *wanbpf.Collector   // WAN-edge eBPF collectors; nil unless EnableWANBPF
 	wanbpfMu     sync.RWMutex
 	wanbpfSnap   *wanbpf.Snapshot
@@ -142,6 +143,7 @@ func New(addr string, interval time.Duration, histCap int, vmURL, version string
 	app.Get("/api/config", s.handleAPIConfig)
 	app.Get("/api/report", s.handleAPIReport)
 	app.Get("/api/usage", s.handleAPIUsage)
+	app.Get("/api/usage/dests", s.handleAPIUsageDests)
 	app.Get("/events", s.handleSSE)
 
 	s.app = app
@@ -223,6 +225,10 @@ func (s *Server) EnableEBPFAcct(iface string) error {
 	// The kernel map becomes the per-client data source: same store, same
 	// API surface, same charts — different counter source.
 	s.clientStore.SetEBPF(col)
+	// Fold the per-destination counters into today's per-device totals
+	// every 5 s (same cadence as the WAN-edge poller).
+	stop := make(chan struct{})
+	go s.startDestPoller(stop)
 	s.app.Get("/api/acct-ebpf", func(c fiber.Ctx) error {
 		devices, err := col.Read()
 		if err != nil {

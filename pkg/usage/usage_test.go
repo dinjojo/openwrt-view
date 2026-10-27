@@ -74,7 +74,7 @@ func TestDailyEmptyDir(t *testing.T) {
 func TestPrune(t *testing.T) {
 	dir := t.TempDir()
 	s := New(dir)
-	old := time.Now().AddDate(0, 0, -40)
+	old := time.Now().AddDate(0, 0, -410)
 	if err := s.Append(old, []Sample{{MAC: "aa:bb:cc:dd:ee:01", Rx: 1}}); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, fileName(old))); !os.IsNotExist(err) {
-		t.Fatal("40-day-old file should have been pruned")
+		t.Fatal("410-day-old file should have been pruned")
 	}
 }
 

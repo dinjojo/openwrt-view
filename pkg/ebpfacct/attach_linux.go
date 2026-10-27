@@ -78,6 +78,7 @@ func Attach(iface string) (*Collector, error) {
 
 	c := &Collector{}
 	c.read = func() (map[string]Counters, error) { return lc.read() }
+	c.readDests = func() (map[DestKey]DestCounters, error) { return lc.readDests() }
 	c.close = lc.close
 	return c, nil
 }
@@ -109,6 +110,54 @@ func (lc *linuxCollector) read() (map[string]Counters, error) {
 		out[mac] = Counters{Rx: val.Down, Tx: val.Up}
 	}
 	if err := iter.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// readDests walks the per-destination map, rendering keys as text.
+func (lc *linuxCollector) readDests() (map[DestKey]DestCounters, error) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	m := lc.coll.Maps["dest_bytes"]
+	if m == nil {
+		return nil, errors.New("ebpfacct: dest_bytes map missing")
+	}
+	var (
+		key struct {
+			Mac    uint64
+			Prefix uint64
+			Fam    uint32
+			Pad    uint32
+		}
+		val struct{ Up, Down uint64 }
+		out = map[DestKey]DestCounters{}
+		it  = m.Iterate()
+	)
+	for it.Next(&key, &val) {
+		// The MAC is big-endian in the low 48 bits; the v4 prefix is
+		// the address's first three octets in the low three bytes
+		// (the u32 is read little-endian); the v6 prefix is the
+		// address's first six bytes, copied in wire order.
+		mac := net.HardwareAddr{
+			byte(key.Mac >> 40), byte(key.Mac >> 32), byte(key.Mac >> 24),
+			byte(key.Mac >> 16), byte(key.Mac >> 8), byte(key.Mac),
+		}.String()
+		fam := int(key.Fam)
+		prefix := ""
+		switch fam {
+		case 4:
+			prefix = fmt.Sprintf("%d.%d.%d.0/24", byte(key.Prefix), byte(key.Prefix>>8), byte(key.Prefix>>16))
+		case 6:
+			prefix = fmt.Sprintf("%02x%02x:%02x%02x:%02x%02x::/48",
+				byte(key.Prefix), byte(key.Prefix>>8), byte(key.Prefix>>16),
+				byte(key.Prefix>>24), byte(key.Prefix>>32), byte(key.Prefix>>40))
+		default:
+			continue
+		}
+		out[DestKey{Mac: mac, Prefix: prefix, Fam: fam}] = DestCounters{Up: val.Up, Down: val.Down}
+	}
+	if err := it.Err(); err != nil {
 		return nil, err
 	}
 	return out, nil

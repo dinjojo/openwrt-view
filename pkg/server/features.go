@@ -70,7 +70,7 @@ func (s *Server) handleAPIUsage(c fiber.Ctx) error {
 		if err != nil || p < 1 {
 			return c.Status(400).SendString(`{"error":"days must be a positive integer"}`)
 		}
-		n = min(p, 30)
+		n = min(p, 400)
 	}
 	out := usagePayload{Days: []usage.Day{}, DaysTotal: n}
 	if s.usage != nil {
