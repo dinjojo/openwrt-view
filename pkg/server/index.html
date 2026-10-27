@@ -302,8 +302,9 @@
       background: color-mix(in srgb, var(--accent) 10%, var(--panel)); color: var(--accent);
       display: inline-flex; align-items: center; justify-content: center; flex: none; }
     .ov-gauges { display: flex; flex-direction: column; gap: var(--s2); margin-bottom: var(--s3); }
-    .gauge { display: grid; grid-template-columns: 7.5rem 1fr auto; align-items: center; gap: var(--s3); }
+    #ov-gauges .gauge { grid-template-columns: 7.5rem 1fr auto 64px; }
     .gauge-lab { font-size: var(--t-sm); color: var(--ink-2); }
+    .gauge .m-spark { width: 64px; height: 20px; }
     .bar { height: 8px; border-radius: 4px; background: var(--well); overflow: hidden; }
     .bar i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width .4s; }
 
@@ -325,6 +326,7 @@
     .ov-busy-row:hover { background: var(--well); }
     .ov-busy-row .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ov-busy-row .rates { margin-left: auto; color: var(--ink-2); font-variant-numeric: tabular-nums; flex: none; }
+    .ov-busy-row .m-spark { width: 56px; height: 18px; flex: none; }
 
     /* Usage donut */
     .ov-usage { display: flex; align-items: center; gap: var(--s4); }
@@ -339,10 +341,15 @@
     .ov-usage-row .nm { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); min-width: 0; }
     .ov-usage-row .gb { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
     .ov-usage-row .pc { color: var(--ink-2); min-width: 2.6rem; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-    /* Data Usage card: Firewalla-style bottom-aligned bars. */
-    .du-bar { flex: 1 1 0; min-width: 4px; height: 100%; display: flex; align-items: flex-end; cursor: pointer; }
-    .du-bar i { display: block; width: 100%; background: color-mix(in srgb, var(--accent) 65%, transparent); border-radius: 2px 2px 0 0; }
-    .du-bar:hover i { background: var(--accent); }
+    /* Data Usage card: Firewalla-style bottom-aligned bars over dashed
+       gridlines with max-scale labels on the right and x ticks below. */
+    .du-bar { flex: 1 1 0; min-width: 4px; max-width: 32px; height: 100%; display: flex; align-items: flex-end; cursor: pointer; position: relative; z-index: 1; }
+    #du-chart { justify-content: space-evenly; }
+    .du-bar i { display: block; width: 100%; background: var(--accent); border-radius: 4px 4px 0 0; opacity: .82; transition: opacity .15s; }
+    .du-bar:hover i { opacity: 1; }
+    .du-grid-line { position: absolute; left: 0; right: 3.4rem; border-top: 1px dashed var(--groove); z-index: 0; }
+    .du-grid-lab { position: absolute; right: 0; transform: translateY(-50%); font-size: var(--t-2xs); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+    .du-axis-lab { position: absolute; top: 0; transform: translateX(-50%); font-size: var(--t-2xs); color: var(--ink-3); white-space: nowrap; }
 
     /* Applications: ECharts-style composition donut beside the trend
        chart. Hovering a slice thickens it and swaps the centre readout
@@ -868,8 +875,12 @@
             <button id="du-days" class="intrange-btn du-btn on" data-du="days" role="button">Days</button>
             <button id="du-months" class="intrange-btn du-btn" data-du="months" role="button">Months</button>
           </div>
-          <div id="du-chart" style="display:flex;align-items:flex-end;gap:3px;height:64px;margin-top:6px"></div>
-          <div id="du-sub" class="xs muted" style="margin-top:6px"></div>
+          <div id="du-plot" style="position:relative;height:96px;margin-top:8px">
+            <div id="du-grid" aria-hidden="true"></div>
+            <div id="du-chart" style="display:flex;align-items:flex-end;gap:3px;height:100%;position:relative"></div>
+          </div>
+          <div id="du-axis" style="position:relative;height:14px;margin-top:4px" aria-hidden="true"></div>
+          <div id="du-sub" class="xs muted" style="margin-top:2px"></div>
           <p class="xs muted" style="margin-top:6px">Counters include Ethernet/PPPoE/IP headers — expect a few percent of divergence from your ISP&rsquo;s meter. The ISP&rsquo;s number is the standard.</p>
         </section>
 
@@ -3941,7 +3952,13 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
 
     // Busiest-right-now (Network card): bandix-style live device ranking —
     // top 3 online clients by current total rate, from /api/clients (a
-    // snapshot pollOverview already fetches — no extra request).
+    // snapshot pollOverview already fetches — no extra request). Each row
+    // carries a mini rate sparkline built from a client-side ring buffer
+    // (last 40 snapshots) so you see the shape of the device's traffic,
+    // not just the instant.
+    const busyHist = {}; // name -> [total bytes/s]
+    const BUSY_CAP = 40;
+
     function renderBusiest(cl) {
       const block = document.getElementById('ov-busy');
       if (!block) return;
@@ -3951,9 +3968,19 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         .slice(0, 3);
       block.style.display = rows.length ? '' : 'none';
       if (!rows.length) return;
-      document.getElementById('ov-busy-rows').innerHTML = rows.map(r =>
+      rows.forEach(r => {
+        const hst = (busyHist[r.name] || (busyHist[r.name] = []));
+        hst.push(r.rx + r.tx);
+        if (hst.length > BUSY_CAP) hst.shift();
+      });
+      Object.keys(busyHist).forEach(k => { if (!rows.some(r => r.name === k)) delete busyHist[k]; });
+      document.getElementById('ov-busy-rows').innerHTML = rows.map((r, i) =>
         '<div class="ov-busy-row"><span class="n">' + h(r.name) + '</span>' +
+        '<svg id="spk-busy-' + i + '" class="m-spark" viewBox="0 0 100 28" preserveAspectRatio="none" role="img" aria-label="' + h(r.name) + ' rate trend"></svg>' +
         '<span class="rates">' + fmtBits(r.rx) + ' \u2193 / ' + fmtBits(r.tx) + ' \u2191</span></div>').join('');
+      rows.forEach((r, i) =>
+        drawAreaSparkline(document.getElementById('spk-busy-' + i),
+          busyHist[r.name] || [], '#0069ff', 'g-busy-' + i));
     }
 
     // Direct-line (native WAN) helpers for the exit-paths strip. WAN rates come
@@ -5199,13 +5226,19 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       }
     }
 
-    function ovGauge(label, fmt, frac, state) {
+    function ovGauge(label, fmt, frac, state, series, gid) {
       const pct = Math.max(2, Math.min(100, frac * 100));
       const col = state === 'crit' ? 'var(--lamp-crit)' : state === 'warn' ? 'var(--lamp-warn)' : 'var(--accent)';
+      // Optional 24 h trend sparkline, drawn from the same system history
+      // payload the gauge value came from — no extra request.
+      const spark = (series && series.length > 1 && gid)
+        ? '<svg id="spk-g-' + gid + '" class="m-spark" viewBox="0 0 100 28" preserveAspectRatio="none" role="img" aria-label="' + label + ' trend"></svg>'
+        : '';
       return '<div class="gauge">' +
         '<span class="gauge-lab">' + label + '</span>' +
         '<div class="bar"><i style="width:' + pct.toFixed(0) + '%;background:' + col + '"></i></div>' +
         '<span class="num right' + (state === 'crit' ? ' crit' : state === 'warn' ? ' warn' : '') + '">' + fmt + '</span>' +
+        spark +
       '</div>';
     }
 
@@ -5254,10 +5287,17 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         const load = last(ovWanData.load) ?? 0;
         const cpu = last(ovWanData.cpu) ?? 0;
         document.getElementById('ov-gauges').innerHTML =
-          ovGauge('CPU', cpu.toFixed(0) + '%', cpu / 100, cpu > 90 ? 'crit' : cpu > 70 ? 'warn' : '') +
-          ovGauge('Memory', (100 - mem).toFixed(0) + '%', (100 - mem) / 100, mem < 10 ? 'crit' : mem < 20 ? 'warn' : '') +
-          ovGauge('Temperature', temp.toFixed(0) + '\u00b0C', temp / 100, temp > 70 ? 'crit' : temp > 60 ? 'warn' : '') +
-          ovGauge('Load', load.toFixed(2), Math.min(1, load / 4), load > 4 ? 'warn' : '');
+          ovGauge('CPU', cpu.toFixed(0) + '%', cpu / 100, cpu > 90 ? 'crit' : cpu > 70 ? 'warn' : '', ovWanData.cpu, 'cpu') +
+          ovGauge('Memory', (100 - mem).toFixed(0) + '%', (100 - mem) / 100, mem < 10 ? 'crit' : mem < 20 ? 'warn' : '', (ovWanData.mem || []).map(v => 100 - v), 'mem') +
+          ovGauge('Temperature', temp.toFixed(0) + '\u00b0C', temp / 100, temp > 70 ? 'crit' : temp > 60 ? 'warn' : '', ovWanData.temp, 'temp') +
+          ovGauge('Load', load.toFixed(2), Math.min(1, load / 4), load > 4 ? 'warn' : '', ovWanData.load, 'load');
+        // Gauge trend sparklines (24 h, one sample/min).
+        const gSpark = (key, data, color) =>
+          drawSparkline(document.getElementById('spk-g-' + key), data, color);
+        gSpark('cpu', ovWanData.cpu, 'var(--accent)');
+        gSpark('mem', (ovWanData.mem || []).map(v => 100 - v), 'var(--accent)');
+        gSpark('temp', ovWanData.temp, 'var(--lamp-warn)');
+        gSpark('load', ovWanData.load, 'var(--accent)');
         const st = cpu > 90 || temp > 70 || mem < 10 ? 'crit' : cpu > 70 || temp > 60 || mem < 20 ? 'warn' : 'ok';
         if (gwState) {
           gwState.dataset.state = st;
@@ -5605,9 +5645,28 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (!chart || !duCache) return;
       const title = document.getElementById('du-title');
       const sub = document.getElementById('du-sub');
+      const grid = document.getElementById('du-grid');
+      const axis = document.getElementById('du-axis');
       const tot = d => Object.values(d.clients || {}).reduce((a, c) => a + (c.rx_gb || 0) + (c.tx_gb || 0), 0);
       const days = duCache.slice();
       const gb1 = g => g >= 1 ? g.toFixed(1) + ' GB' : (g * 1024).toFixed(0) + ' MB';
+
+      // Firewalla-style chrome: dashed gridlines at max / half / zero with
+      // the scale labelled on the right, and a few x ticks under the plot.
+      const chrome = (rows, lab) => {
+        const max = Math.max(...rows.map(r => r.gb), 1e-9);
+        grid.innerHTML = [1, 0.5, 0].map(f =>
+          '<div class="du-grid-line" style="top:' + (100 - f * 96) + '%"></div>' +
+          '<span class="du-grid-lab" style="top:' + (100 - f * 96) + '%">' +
+            (f ? gb1(max * f) : '0') + '</span>').join('');
+        const n = rows.length;
+        const ticks = [...new Set([0, Math.round(n / 4), Math.round(n / 2), Math.round(3 * n / 4), n - 1])]
+          .filter(i => i >= 0 && i <= n - 1);
+        axis.innerHTML = ticks.map(i =>
+          '<span class="du-axis-lab" style="left:' +
+          Math.min(96, Math.max(4, i / Math.max(1, n - 1) * 100)) + '%">' +
+          h(lab(rows[i])) + '</span>').join('');
+      };
 
       if (duState.grain === 'days') {
         const shown = duState.month ? days.filter(d => d.date.startsWith(duState.month)) : days.slice(-30);
@@ -5620,6 +5679,10 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         const sum = rows.reduce((a, r) => a + r.gb, 0);
         title.textContent = duState.month ? 'Daily usage · ' + duState.month : 'Daily usage';
         sub.textContent = rows.length + ' days · ' + gb1(sum) + ' total · avg ' + gb1(sum / Math.max(1, rows.length)) + '/day';
+        chrome(rows, r => {
+          const dt = new Date(r.key + 'T00:00:00');
+          return isNaN(dt) ? r.key : dt.toLocaleString([], { day: '2-digit', month: 'short' });
+        });
         return;
       }
       // Months: aggregate the day files by YYYY-MM.
@@ -5640,7 +5703,12 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       });
       title.textContent = 'Monthly usage';
       const vals = keys.map(k => months[k]);
-      sub.textContent = keys.length + ' months · avg ' + gb1(vals.reduce((a, v) => a + v, 0) / Math.max(1, vals.length)) + '/month';
+      const avg = vals.reduce((a, v) => a + v, 0) / Math.max(1, vals.length);
+      sub.textContent = keys.length + (keys.length === 1 ? ' month' : ' months') + ' · avg ' + gb1(avg) + '/month';
+      chrome(rows, r => {
+        const dt = new Date(r.key + '-01T00:00:00');
+        return isNaN(dt) ? r.key : dt.toLocaleString([], { month: 'short' });
+      });
     }
 
     document.getElementById('du-days').onclick = () => {
@@ -5754,7 +5822,10 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     // from/to and applies on Apply.
     document.addEventListener('click', e => {
       const b = e.target.closest('.intrange-btn');
-      if (!b) return;
+      // The Data Usage Days/Months pills share the intrange-btn styling but
+      // are not dashboard windows — handling them here clobbered intRange,
+      // the window pill selection and crashed loadIntChart.
+      if (!b || b.classList.contains('du-btn')) return;
       intRange = b.dataset.intrange;
       _setPillBtns('.intrange-btn', 'intrange', intRange);
       // Reveal/hide the from/to pickers right away — Custom must show its
