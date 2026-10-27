@@ -1008,6 +1008,15 @@
            queueing shows up directly, per packet. -->
       <section id="sqm-ebpf" class="sect hidden">
         <div class="sect-head"><h2 class="h2">Download queue delay <span class="sub">eBPF &middot; WAN ingress &rarr; LAN egress, measured per packet &middot; 5 s window</span></h2></div>
+        <!-- The verdict the whole panel exists for: is latency coming from
+             this router (CAKE queueing) or from the path beyond it (ISP)? -->
+        <div class="ov-verdict-c" id="sqm-verdict" style="margin-bottom:var(--s3)">
+          <span class="ov-verdict-ic" id="sqm-verdict-ic"></span>
+          <span class="ov-verdict-txt">
+            <h2 class="ov-verdict-h" id="sqm-verdict-h" style="font-size:1.05rem">Checking line health…</h2>
+            <p class="ov-verdict-sub" id="sqm-verdict-sub"></p>
+          </span>
+        </div>
         <div id="qdelay-meters" class="meters"></div>
         <div id="qdelay-hist" class="q-hist" aria-hidden="true"></div>
         <div id="qdelay-hist-lab" class="q-hist-lab hidden"><span>1 &micro;s</span><span>1 s</span></div>
@@ -1151,6 +1160,7 @@
       <!-- eBPF WAN gate + router-local service accounting -->
       <section id="sys-wanbpf" class="sect hidden">
         <div class="sect-head"><h2 class="h2">WAN gate &amp; router services <span class="sub">eBPF &middot; XDP on WAN, TC on LAN bridge &middot; cumulative since attach</span></h2></div>
+        <p class="sub" style="margin:0 var(--s5) var(--s2)"><b>WAN packets</b> is everything the internet sent to your router. <b>Spoofed sources</b> and <b>scan drops</b> are background internet noise the gate deflects — a nonzero count is normal, growing fast means a scan is in progress. The <b>service ledger</b> is your devices talking to the router itself: <i>In</i> = devices&nbsp;&rarr;&nbsp;router, <i>Out</i> = router&nbsp;&rarr;&nbsp;devices, <i>now</i> = rate over the last 5&nbsp;s.</p>
         <div id="wangate-meters" class="meters"></div>
         <div class="overflow-x-auto tbl-wrap"><table class="tbl" style="min-width:560px;margin-top:var(--s4)">
           <thead><tr>
@@ -2316,6 +2326,51 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (!sect) return;
       if (!s || !s.hooks || !s.hooks.length) { sect.classList.add('hidden'); return; }
       sect.classList.remove('hidden');
+
+      // The verdict: router or path? The router's share is the queue
+      // delay it adds per packet; the path's share is the per-device
+      // RTT. Queue delay in the millisecond range while RTT sits far
+      // higher means the delay is added beyond this router.
+      const qN = s.q_count || 0, qAvg = s.q_avg_ns || 0, qMax = s.q_max_ns || 0;
+      const active = (s.srtt || []).filter(r => (r.win_count || 0) > 0)
+        .sort((a, b) => (b.win_avg_ns || 0) - (a.win_avg_ns || 0));
+      const worstDev = active[0];
+      const rttMax = active.reduce((m, r) => Math.max(m, r.max_ns || 0), 0);
+      const routerBad = qN >= 20 && (qMax >= 5e6 || qAvg >= 2e6);
+      const pathBad = !!worstDev && ((worstDev.win_avg_ns || 0) >= 150e6 || rttMax >= 1e9);
+      const vi = document.getElementById('sqm-verdict-ic');
+      const vh = document.getElementById('sqm-verdict-h');
+      const vs = document.getElementById('sqm-verdict-sub');
+      if (vi && vh && vs) {
+        const dev = worstDev ? (knownName(worstDev.mac) || worstDev.mac) : '';
+        let state = 'ok', head = 'Line is healthy', sub;
+        if (routerBad && pathBad) {
+          state = 'warn'; head = 'Delay at the router and on the path';
+          sub = 'The router held packets up to ' + fmtMs(qMax) + ' and ' + h(dev) +
+                ' still saw ' + fmtMs(worstDev.win_avg_ns || 0) + ' round trips — both CAKE and the line are busy.';
+        } else if (pathBad) {
+          state = 'crit'; head = 'The problem is the line, not the router';
+          sub = 'Router queue delay is negligible (' + fmtMs(qAvg) + ' mean, ' + fmtMs(qMax) +
+                ' worst), but ' + h(dev) + '’s connections round-trip in ' + fmtMs(worstDev.win_avg_ns || 0) +
+                (rttMax >= 1e9 ? ', spiking to ' + fmtMs(rttMax) : '') +
+                '. That delay is added by the ISP or the far end.';
+        } else if (routerBad) {
+          state = 'warn'; head = 'The router’s queue is adding delay';
+          sub = 'Worst packet waited ' + fmtMs(qMax) + ' in the CAKE queue (mean ' + fmtMs(qAvg) +
+                '). That is CAKE holding back bursts to keep the link responsive — expected under full load.';
+        } else if (qN >= 20) {
+          sub = 'Router adds almost no delay (' + fmtMs(qAvg) + ' mean, ' + fmtMs(qMax) + ' worst)' +
+                (active.length ? ' · slowest device now ' + fmtMs(worstDev.win_avg_ns || 0) + ' RTT' : '') +
+                (active.length ? '' : ' · no RTT samples this window');
+        } else {
+          sub = 'Not enough traffic in this window yet.';
+        }
+        vi.dataset.state = state;
+        vh.dataset.state = state;
+        vh.textContent = head;
+        vs.innerHTML = sub || '';
+      }
+
       const m = document.getElementById('qdelay-meters');
       m.innerHTML =
         '<div class="meter"><div class="m-lab">Average delay</div>' +
@@ -2387,13 +2442,31 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         rows.innerHTML = '<tr><td colspan="6" class="empty">No service traffic observed yet.</td></tr>';
         return;
       }
-      rows.innerHTML = svc.map(x =>
-        '<tr><td>' + h(x.label) + '</td>' +
+      // Named services (DNS, LuCI, this dashboard) get their own row.
+      // The client-side reply legs of those connections arrive on
+      // ephemeral ports — dozens of one-port rows of noise — so they
+      // collapse into a single summed row.
+      const isEph = x => /^port \d+$/.test(x.label);
+      const named = svc.filter(x => !isEph(x));
+      const eph = svc.filter(x => isEph(x));
+      const sum = (arr, k) => arr.reduce((a, x) => a + Number(x[k] || 0), 0);
+      const tr = (label, note, x) =>
+        '<tr><td>' + label + (note ? ' <span class="xs muted">' + note + '</span>' : '') + '</td>' +
         '<td class="r num">' + x.port + '</td>' +
         '<td class="r num">' + fmtBytes(x.rx_total) + '</td>' +
         '<td class="r num">' + fmtBytes(x.tx_total) + '</td>' +
         '<td class="r num">' + fmtBits(x.rx_win / 5) + '</td>' +
-        '<td class="r num">' + fmtBits(x.tx_win / 5) + '</td></tr>').join('');
+        '<td class="r num">' + fmtBits(x.tx_win / 5) + '</td></tr>';
+      let html = named.map(x => tr(h(x.label), '', x)).join('');
+      if (eph.length) {
+        html += tr('Ephemeral reply legs', 'client-side ports of the router’s own services · ' +
+          eph.length + ' ports', {
+          port: '–',
+          rx_total: sum(eph, 'rx_total'), tx_total: sum(eph, 'tx_total'),
+          rx_win: sum(eph, 'rx_win'), tx_win: sum(eph, 'tx_win'),
+        });
+      }
+      rows.innerHTML = html;
     }
 
     // ── Clients tab ───────────────────────────────────────────────────────
