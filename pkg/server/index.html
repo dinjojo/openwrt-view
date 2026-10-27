@@ -1037,7 +1037,7 @@
           <p class="sub" style="margin-top:var(--s4);margin-bottom:var(--s2)">Passive RTT per device &middot; from each connection&rsquo;s TCP timestamps &middot; 5 s window</p>
           <div class="overflow-x-auto tbl-wrap"><table class="tbl" style="min-width:560px">
             <thead><tr>
-              <th>Device</th><th class="r">Samples</th><th class="r">RTT now</th><th class="r">Avg</th><th class="r">Worst</th>
+              <th>Device</th><th class="r">Samples</th><th class="r">RTT now</th><th class="r">Avg</th><th class="r">Worst</th><th class="r">Slowest destination</th>
             </tr></thead>
             <tbody id="srtt-rows"></tbody>
           </table></div>
@@ -2482,12 +2482,19 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       swrap.classList.remove('hidden');
       srows.innerHTML = srtt.map(r => {
         const nm = knownName(r.mac) || r.mac;
+        // Slowest of the device's windowed destination prefixes — the
+        // answer to "which service is slow", vs the blended number.
+        const dests = r.dests || [];
+        const slow = dests.length ? dests.reduce((a, b) => (b.avg_ns > a.avg_ns ? b : a)) : null;
+        const tip = dests.map(d => d.prefix + ' · ' + fmtMs(d.avg_ns) + ' avg (' + d.count + ')').join('\n');
         return '<tr><td>' + h(nm) +
           (nm !== r.mac ? ' <span class="xs muted">' + h(r.mac) + '</span>' : '') + '</td>' +
           '<td class="r num">' + fmtNum(r.win_count || 0) + '</td>' +
           '<td class="r num">' + (r.win_avg_ns ? fmtMs(r.win_avg_ns) : '–') + '</td>' +
           '<td class="r num">' + fmtMs(r.avg_ns) + '</td>' +
-          '<td class="r num">' + (r.max_ns ? fmtMs(r.max_ns) : '–') + '</td></tr>';
+          '<td class="r num">' + (r.max_ns ? fmtMs(r.max_ns) : '–') + '</td>' +
+          '<td class="r num"' + (tip ? ' title="' + h(tip) + '"' : '') + '>' +
+          (slow ? h(slow.prefix) + ' <span class="xs muted">' + fmtMs(slow.avg_ns) + '</span>' : '–') + '</td></tr>';
       }).join('');
     }
 

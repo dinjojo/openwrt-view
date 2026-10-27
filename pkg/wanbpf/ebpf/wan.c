@@ -454,6 +454,31 @@ struct {
     __type(value, struct q_delay);
 } srtt_hist SEC(".maps");
 
+// Per-client-per-destination RTT: answers "which service is slow" —
+// a device's blended number hides whether a far CDN or the line moved.
+// Key: client MAC + destination prefix (/24 for IPv4, /48 for IPv6).
+// Value is slim (no histogram): count, mean, worst per window. Capped
+// at 2048 prefixes ≈ 100 KB; LRU evicts cold prefixes.
+struct dest_key {
+    __u64 mac;
+    __u64 prefix;                    // v4: top 24 bits of the addr; v6: top 48
+    __u32 fam;                       // 4 or 6
+    __u32 pad;
+};
+
+struct dest_rtt {
+    __u64 count;
+    __u64 sum_ns;
+    __u64 max_ns;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 2048);
+    __type(key, struct dest_key);
+    __type(value, struct dest_rtt);
+} srtt_dest SEC(".maps");
+
 // tcp_tsopt scans the TCP options for the timestamp option (kind 8).
 // Returns 1 with tsval/tsecver filled, 0 if absent or unparseable. The
 // caller has proven a full 20-byte TCP header fits. The scan is a
@@ -589,6 +614,35 @@ int collect_rtt(struct __sk_buff *skb) {
     q->sum_ns += delta;
     if (delta > q->max_ns)
         q->max_ns = delta;
+
+    // Per-destination slice: on WAN ingress the packet's source is the
+    // remote endpoint the client is talking to. Record the same RTT
+    // against its /24 (/48 for v6) so userspace can say which service
+    // moved. One extra LRU update per matched packet — the hot path
+    // (packets with no timestamp echo) never reaches here.
+    struct dest_key dk = {.mac = tr->mac};
+    if (fam == 4) {
+        /* saddr is the address's bytes loaded little-endian, so the
+         * low 3 bytes are octets 1-3; mask off the host octet. */
+        dk.prefix = (__u64)(k4.saddr & 0x00FFFFFFu);
+        dk.fam = 4;
+    } else {
+        __builtin_memcpy(&dk.prefix, k6.saddr, 6);   // top 48 bits
+        dk.fam = 6;
+    }
+    struct dest_rtt *d = bpf_map_lookup_elem(&srtt_dest, &dk);
+    if (!d) {
+        struct dest_rtt zero = {};
+        if (bpf_map_update_elem(&srtt_dest, &dk, &zero, BPF_NOEXIST) != 0)
+            return TCX_NEXT;
+        d = bpf_map_lookup_elem(&srtt_dest, &dk);
+        if (!d)
+            return TCX_NEXT;
+    }
+    d->count++;
+    d->sum_ns += delta;
+    if (delta > d->max_ns)
+        d->max_ns = delta;
     return TCX_NEXT;
 }
 

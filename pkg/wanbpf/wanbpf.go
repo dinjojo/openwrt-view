@@ -64,6 +64,19 @@ type DeviceRTT struct {
 	MaxNs    uint64 `json:"max_ns"`     // worst sample in the window
 	WinCount uint64 `json:"win_count"`  // samples in the window
 	WinAvgNs uint64 `json:"win_avg_ns"` // windowed mean
+	// Where this device's windowed RTT came from: the busiest
+	// destination prefixes, busiest first. Lets the UI distinguish
+	// "talks to a far CDN" from "the line is slow".
+	Dests []DestRTT `json:"dests,omitempty"`
+}
+
+// DestRTT is one destination prefix's windowed RTT for one device.
+type DestRTT struct {
+	Prefix string `json:"prefix"` // "3.175.86.0/24" or "2406:da12:1::/48"-style v6
+	Fam    int    `json:"fam"`    // 4 or 6
+	Count  uint64 `json:"count"`  // samples in the window
+	AvgNs  uint64 `json:"avg_ns"` // windowed mean for this prefix
+	MaxNs  uint64 `json:"max_ns"` // worst sample in the window
 }
 
 // Collector owns the loaded eBPF objects and their attachments. The

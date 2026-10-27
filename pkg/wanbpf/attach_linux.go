@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"sync"
 	"time"
 
@@ -49,6 +50,7 @@ type linuxCollector struct {
 	links    []link.Link
 	prevQ    qDelayPerCPU         // last cumulative queue-delay read
 	prevP    map[uint16]portBytes // last cumulative service read
+	prevD    map[destKey]destRTT  // last cumulative per-dest RTT read
 	prevSrtt map[uint64]qDelayPerCPU
 }
 
@@ -75,7 +77,7 @@ func Attach(wan, ifb, lan string) (*Collector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load eBPF into kernel: %w", err)
 	}
-	lc := &linuxCollector{coll: coll, prevP: map[uint16]portBytes{}, prevSrtt: map[uint64]qDelayPerCPU{}}
+	lc := &linuxCollector{coll: coll, prevP: map[uint16]portBytes{}, prevD: map[destKey]destRTT{}, prevSrtt: map[uint64]qDelayPerCPU{}}
 	hooks := []string{}
 	attachErr := func(where string, err error) (*Collector, error) {
 		lc.close()
@@ -321,6 +323,41 @@ func (lc *linuxCollector) read(hooks []string) (*Snapshot, error) {
 		sortSrtt(snap.Srtt)
 	}
 
+	// Per-device × per-destination RTT. Walk is bounded by the map's
+	// 2048-entry LRU cap (~100 KB kernel memory, ~2k map ops per 5 s
+	// tick — negligible next to the existing walks). Maxima reset per
+	// window so each window reports its own worst, same as above.
+	if m := lc.coll.Maps["srtt_dest"]; m != nil {
+		var (
+			k    destKey
+			v    destRTT
+			iter = m.Iterate()
+		)
+		var walked []destEntry
+		for iter.Next(&k, &v) {
+			walked = append(walked, destEntry{k: k, v: v})
+		}
+		if err := iter.Err(); err != nil {
+			log.Logger.Warn().Err(err).Msg("srtt_dest walk failed; partial window")
+		}
+		byMac := foldDestRTTs(walked, 3, lc.prevD)
+		for i := range snap.Srtt {
+			snap.Srtt[i].Dests = byMac[snap.Srtt[i].Mac]
+		}
+		// Reset per-prefix maxima for the next window; fresh lookup
+		// before Put so counters advanced meanwhile are not clobbered.
+		for _, e := range walked {
+			var fresh destRTT
+			if m.Lookup(e.k, &fresh) != nil {
+				continue // evicted between walk and reset
+			}
+			fresh.MaxNs = 0
+			if err := m.Put(e.k, fresh); err != nil {
+				break
+			}
+		}
+	}
+
 	// Service bytes (LRU keyed by port; the BPF side stores the port's
 	// big-endian bytes, so decode explicitly).
 	snap.Services = []Service{}
@@ -354,6 +391,81 @@ func (lc *linuxCollector) read(hooks []string) (*Snapshot, error) {
 		sortServices(snap.Services)
 	}
 	return snap, nil
+}
+
+// Per-destination RTT (LRU keyed by client MAC + destination /24 or
+// /48). Same windowed diff discipline as the device table: walked once
+// per tick, folded into each device's row, maxima reset for the next
+// window.
+
+// destKey mirrors the C struct dest_key.
+type destKey struct {
+	Mac    uint64
+	Prefix uint64
+	Fam    uint32
+	Pad    uint32
+}
+
+// destRTT mirrors the C struct dest_rtt.
+type destRTT struct {
+	Count uint64
+	SumNs uint64
+	MaxNs uint64
+}
+
+// destEntry is one walked map entry.
+type destEntry struct {
+	k destKey
+	v destRTT
+}
+
+// destPrefixString renders the key's prefix: "3.175.86.0/24" for IPv4,
+// "2406:da12:0001::/48" for IPv6.
+func destPrefixString(k destKey) string {
+	if k.Fam == 6 {
+		// The C side memcpy'd the address's first 6 bytes into the
+		// little-endian u64: byte i of the address is byte i of it.
+		return fmt.Sprintf("%02x%02x:%02x%02x:%02x%02x::/48",
+			byte(k.Prefix), byte(k.Prefix>>8), byte(k.Prefix>>16),
+			byte(k.Prefix>>24), byte(k.Prefix>>32), byte(k.Prefix>>40))
+	}
+	return fmt.Sprintf("%d.%d.%d.0/24", byte(k.Prefix), byte(k.Prefix>>8), byte(k.Prefix>>16))
+}
+
+// foldDestRTTs groups walked per-prefix counters by device and keeps
+// the `keep` busiest prefixes per device (by windowed sample count).
+// Counters in the map are cumulative since the entry was created, so
+// each device's previous read (prev) is differenced out — a dest with
+// no new samples this window is skipped. prev is advanced in place.
+func foldDestRTTs(entries []destEntry, keep int, prev map[destKey]destRTT) map[string][]DestRTT {
+	byMac := map[string][]DestRTT{}
+	for _, e := range entries {
+		if e.v.Count == 0 {
+			continue
+		}
+		p := prev[e.k]
+		winC := e.v.Count - min64(p.Count, e.v.Count)
+		winS := e.v.SumNs - min64(p.SumNs, e.v.SumNs)
+		prev[e.k] = e.v
+		if winC == 0 {
+			continue // talked in an earlier window only
+		}
+		byMac[macString(e.k.Mac)] = append(byMac[macString(e.k.Mac)], DestRTT{
+			Prefix: destPrefixString(e.k),
+			Fam:    int(e.k.Fam),
+			Count:  winC,
+			AvgNs:  winS / winC,
+			MaxNs:  e.v.MaxNs,
+		})
+	}
+	for mac, ds := range byMac {
+		sort.Slice(ds, func(i, j int) bool { return ds[i].Count > ds[j].Count })
+		if len(ds) > keep {
+			ds = ds[:keep]
+		}
+		byMac[mac] = ds
+	}
+	return byMac
 }
 
 func min64(a, b uint64) uint64 {
