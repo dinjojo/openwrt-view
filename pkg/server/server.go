@@ -71,6 +71,7 @@ type Server struct {
 	wanbpf       *wanbpf.Collector   // WAN-edge eBPF collectors; nil unless EnableWANBPF
 	wanbpfMu     sync.RWMutex
 	wanbpfSnap   *wanbpf.Snapshot
+	wanbpfHist   *wanbpfRing // minute-resolution latency history for Trends
 	wan          *wan.Poller
 	sys          *sysmon.Pollers
 	orbi         *orbi.Poller
@@ -249,9 +250,11 @@ func (s *Server) EnableWANBPF(spec string) error {
 		return err
 	}
 	s.wanbpf = col
+	s.wanbpfHist = newWanbpfRing(wanbpfHistCap)
 	go func() {
 		t := time.NewTicker(5 * time.Second)
 		defer t.Stop()
+		ticks := 0
 		for range t.C {
 			snap, err := col.Read()
 			if err != nil {
@@ -261,6 +264,10 @@ func (s *Server) EnableWANBPF(spec string) error {
 			s.wanbpfMu.Lock()
 			s.wanbpfSnap = snap
 			s.wanbpfMu.Unlock()
+			// One sample per minute into the 24 h Trends ring.
+			if ticks++; ticks%12 == 0 {
+				s.recordWanbpfHistory(snap)
+			}
 		}
 	}()
 	s.app.Get("/api/wanbpf", func(c fiber.Ctx) error {
@@ -271,6 +278,9 @@ func (s *Server) EnableWANBPF(spec string) error {
 			return c.JSON(fiber.Map{"ifaces": parts, "pending": true})
 		}
 		return c.JSON(fiber.Map{"ifaces": parts, "snapshot": snap})
+	})
+	s.app.Get("/api/history/wanbpf", func(c fiber.Ctx) error {
+		return c.JSON(fiber.Map{"points": s.wanbpfHist.all()})
 	})
 	return nil
 }

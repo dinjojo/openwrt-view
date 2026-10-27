@@ -981,6 +981,15 @@
             <p class="tr-verdict" id="tr-shaper-verdict"></p>
             <div id="tr-shaper-strip"></div>
           </section>
+          <!-- Path latency (eBPF): passive per-device RTT + router queue
+               delay, minute resolution, last 24 h. The live 5 s views on
+               the SQM tab answer "who is slow right now"; this answers
+               "when, and how often". -->
+          <section class="sect">
+            <div class="sect-head"><h2 class="h2">Path latency <span class="sub">eBPF &middot; passive RTT + queue delay &middot; last 24 h, minute resolution</span></h2></div>
+            <p class="tr-verdict" id="tr-ebpf-verdict"></p>
+            <div id="tr-ebpf-lat"></div>
+          </section>
           <!-- Wi-Fi quality: per-device signal, link and presence -->
           <section class="sect">
             <div class="sect-head"><h2 class="h2">Wi-Fi quality <span class="sub" id="tr-wifi-sub"></span></h2></div>
@@ -1017,6 +1026,7 @@
             <p class="ov-verdict-sub" id="sqm-verdict-sub"></p>
           </span>
         </div>
+        <p class="sub" id="sqm-verdict-note" style="margin:-4px 0 var(--s3);display:none"></p>
         <div id="qdelay-meters" class="meters"></div>
         <div id="qdelay-hist" class="q-hist" aria-hidden="true"></div>
         <div id="qdelay-hist-lab" class="q-hist-lab hidden"><span>1 &micro;s</span><span>1 s</span></div>
@@ -2319,6 +2329,36 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       return (ns / 1e3).toFixed(0) + ' µs';
     }
 
+    // Chronically slow devices, from the minute-resolution history ring:
+    // a MAC that has been the slowest in (nearly) every one of the last
+    // 12 recorded minutes. One such device must not own the verdict —
+    // it is demoted to the note under the card and the headline reads
+    // the rest of the household. Cached 5 min; a fresh ring re-renders.
+    let sqmHistCache = null, sqmHistAt = 0;
+    function sqmChronicMacs() {
+      const recent = (sqmHistCache || []).slice(-12).filter(p => (p.devs || []).length);
+      const worst = new Map();
+      recent.forEach(p => {
+        const w = p.devs.reduce((a, d) => ((d.win_avg_ns || 0) > ((a && a.win_avg_ns) || 0) ? d : a), null);
+        if (w) worst.set(w.mac, (worst.get(w.mac) || 0) + 1);
+      });
+      const out = new Set();
+      for (const [mac, n] of worst) {
+        if (n >= 8 || (recent.length >= 3 && n === recent.length)) out.add(mac);
+      }
+      return out;
+    }
+    async function refreshSqmHist() {
+      if (Date.now() - sqmHistAt < 300000) return;
+      sqmHistAt = Date.now();
+      try {
+        const r = await fetch(appURL('/api/history/wanbpf'));
+        if (!r.ok) return;
+        sqmHistCache = (await r.json()).points || [];
+      } catch (_) { return; }
+      renderWanbpfSqm();   // re-render once the chronic set is current
+    }
+
     /** SQM tab: queue-delay readouts + log2-µs histogram. */
     function renderWanbpfSqm() {
       const sect = document.getElementById('sqm-ebpf');
@@ -2326,21 +2366,43 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (!sect) return;
       if (!s || !s.hooks || !s.hooks.length) { sect.classList.add('hidden'); return; }
       sect.classList.remove('hidden');
+      refreshSqmHist();
 
       // The verdict: router or path? The router's share is the queue
       // delay it adds per packet; the path's share is the per-device
       // RTT. Queue delay in the millisecond range while RTT sits far
       // higher means the delay is added beyond this router.
+      //
+      // One chronically noisy device must not own the headline: a MAC
+      // that has been the slowest in nearly every recent history
+      // minute is demoted to the note below the card, and the verdict
+      // reads the rest of the household. Its numbers stay in the
+      // per-device table either way.
       const qN = s.q_count || 0, qAvg = s.q_avg_ns || 0, qMax = s.q_max_ns || 0;
+      const chronic = sqmChronicMacs();
       const active = (s.srtt || []).filter(r => (r.win_count || 0) > 0)
         .sort((a, b) => (b.win_avg_ns || 0) - (a.win_avg_ns || 0));
-      const worstDev = active[0];
-      const rttMax = active.reduce((m, r) => Math.max(m, r.max_ns || 0), 0);
+      const cand = active.filter(r => !chronic.has(r.mac));
+      const worstDev = cand[0];
+      const rttMax = cand.reduce((m, r) => Math.max(m, r.max_ns || 0), 0);
       const routerBad = qN >= 20 && (qMax >= 5e6 || qAvg >= 2e6);
       const pathBad = !!worstDev && ((worstDev.win_avg_ns || 0) >= 150e6 || rttMax >= 1e9);
       const vi = document.getElementById('sqm-verdict-ic');
       const vh = document.getElementById('sqm-verdict-h');
       const vs = document.getElementById('sqm-verdict-sub');
+      const note = document.getElementById('sqm-verdict-note');
+      if (note) {
+        const known = active.filter(r => chronic.has(r.mac));
+        if (known.length) {
+          note.textContent = known.map(r =>
+            (knownName(r.mac) || r.mac) + ' runs chronically slow (' +
+            fmtMs(r.win_avg_ns || 0) + ' now' + (r.max_ns ? ', worst ' + fmtMs(r.max_ns) : '') +
+            ') — tracked in the table below; it does not drive this verdict.').join(' ');
+          note.style.display = '';
+        } else {
+          note.style.display = 'none';
+        }
+      }
       if (vi && vh && vs) {
         const dev = worstDev ? (knownName(worstDev.mac) || worstDev.mac) : '';
         let state = 'ok', head = 'Line is healthy', sub;
@@ -2358,10 +2420,11 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           state = 'warn'; head = 'The router’s queue is adding delay';
           sub = 'Worst packet waited ' + fmtMs(qMax) + ' in the CAKE queue (mean ' + fmtMs(qAvg) +
                 '). That is CAKE holding back bursts to keep the link responsive — expected under full load.';
-        } else if (qN >= 20) {
+        } else if (qN >= 20 || cand.length) {
+          head = cand.length ? 'Line is healthy' : 'Router is calm — the usual suspect aside';
           sub = 'Router adds almost no delay (' + fmtMs(qAvg) + ' mean, ' + fmtMs(qMax) + ' worst)' +
-                (active.length ? ' · slowest device now ' + fmtMs(worstDev.win_avg_ns || 0) + ' RTT' : '') +
-                (active.length ? '' : ' · no RTT samples this window');
+                (cand.length ? ' · slowest other device now ' + fmtMs(worstDev.win_avg_ns || 0) + ' RTT' :
+                  ' · other devices idle this window');
         } else {
           sub = 'Not enough traffic in this window yet.';
         }
@@ -3867,7 +3930,73 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       return c === 'A' ? 'ok' : c === 'B' ? 'warn' : 'crit';
     }
 
+    // ── Trends: eBPF latency history (passive RTT + queue delay) ─────────
+    // Minute-resolution ring from the server (last 24 h); the chart
+    // shows when the path went slow and when CAKE was busy, which the
+    // live 5 s windows on the SQM tab can only catch by luck.
+    let trEbpfPlots = [];
+    async function loadTrendsEbpf() {
+      const cd = document.getElementById('tr-ebpf-lat');
+      if (!cd) return;
+      let pts;
+      try {
+        const r = await fetch(appURL('/api/history/wanbpf'));
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        pts = (await r.json()).points || [];
+      } catch (_) { return; }
+      trEbpfPlots.forEach(p => { try { p.u.destroy(); } catch (_) {} });
+      trEbpfPlots = [];
+      const verdict = document.getElementById('tr-ebpf-verdict');
+      if (pts.length < 3) {
+        cd.innerHTML = '<p class="note">No latency history yet — one sample lands every minute; a usable trend needs about an hour of uptime.</p>';
+        if (verdict) verdict.textContent = '';
+        return;
+      }
+      const times = pts.map(p => p.t);
+      // Devices seen anywhere in the window, busiest first.
+      const macs = [], totals = new Map();
+      pts.forEach(p => (p.devs || []).forEach(d => {
+        if (!totals.has(d.mac)) { totals.set(d.mac, 0); macs.push(d.mac); }
+        totals.set(d.mac, totals.get(d.mac) + (d.win_count || 0));
+      }));
+      macs.sort((a, b) => totals.get(b) - totals.get(a));
+      const valFor = (mac, pick) => pts.map(p => {
+        const d = (p.devs || []).find(x => x.mac === mac);
+        return d ? pick(d) : null;
+      });
+      const W = Math.max(200, cd.clientWidth - 4), H = 150;
+      // RTT per device, minute-mean and minute-worst as thin lines.
+      const rtSeries = [];
+      macs.forEach((mac, i) => {
+        const label = knownName(mac) || mac;
+        rtSeries.push({ label: label + ' avg', stroke: CL_COLORS[i % CL_COLORS.length],
+          data: valFor(mac, d => (d.win_avg_ns || 0) / 1e6) });
+        rtSeries.push({ label: label + ' worst', stroke: CL_COLORS[i % CL_COLORS.length],
+          dash: '2,3', data: valFor(mac, d => (d.max_ns || 0) / 1e6) });
+      });
+      trEbpfPlots.push({ u: makeChart(cd, W, H, times, rtSeries,
+        'Path RTT per device (ms)', v => fmtMs(v * 1e6), 'tr-ebpf-x') });
+      // Router queue delay alongside — its own (small) scale.
+      trEbpfPlots.push({ u: makeChart(cd, W, H, times, [
+        { label: 'worst packet', stroke: CL_COLORS[0], data: pts.map(p => (p.q_max_ns || 0) / 1e6) },
+        { label: 'mean', stroke: CL_COLORS[1], data: pts.map(p => (p.q_avg_ns || 0) / 1e6) },
+      ], 'Router queue delay (ms)', v => fmtMs(v * 1e6), 'tr-ebpf-x') });
+      // One-line verdict: 24 h peaks on both sides of the comparison.
+      if (verdict) {
+        let peakDev = null, peakNs = 0;
+        pts.forEach(p => (p.devs || []).forEach(d => {
+          if ((d.win_avg_ns || 0) > peakNs) { peakNs = d.win_avg_ns; peakDev = d.mac; }
+        }));
+        const qWorst = Math.max.apply(null, pts.map(p => p.q_max_ns || 0));
+        verdict.textContent =
+          '24 h peak: ' + fmtMs(peakNs) + ' RTT on ' + (peakDev ? (knownName(peakDev) || peakDev) : '—') +
+          ' · router queue worst ' + fmtMs(qWorst) +
+          (peakNs > 10 * Math.max(qWorst, 1) ? ' — the line, not the router' : '');
+      }
+    }
+
     async function loadTrendsPanels() {
+      loadTrendsEbpf();
       let d;
       try {
         let q = 'range=' + trendRange;
