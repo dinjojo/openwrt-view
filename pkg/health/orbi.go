@@ -61,8 +61,17 @@ func evalWifiSignal(op *orbi.Poller) Check {
 	weakest := -1
 	who := ""
 	band := ""
+	wifiClients := 0
 	for _, d := range st.Devices {
 		if d.ConnType != "2.4G" && d.ConnType != "5G" {
+			continue
+		}
+		wifiClients++
+		// Signal 0 means the AP reported no reading (e.g. an Ethernet-
+		// backed device that still lists as 5 GHz, or a blank field in
+		// the XML) — it is missing data, not a dead client at the edge
+		// of the cell. Skipping it keeps the check about real signal.
+		if d.Signal <= 0 {
 			continue
 		}
 		if weakest == -1 || d.Signal < weakest {
@@ -70,8 +79,11 @@ func evalWifiSignal(op *orbi.Poller) Check {
 		}
 	}
 	if weakest == -1 {
-		return Check{Name: name, State: StateUnknown, Value: "—", NumState: -1,
-			Detail: "no wireless clients are connected right now"}
+		detail := "no wireless clients are connected right now"
+		if wifiClients > 0 {
+			detail = "connected clients report no signal quality reading"
+		}
+		return Check{Name: name, State: StateUnknown, Value: "—", NumState: -1, Detail: detail}
 	}
 	// Randomized-MAC devices have no resolvable name; say so instead of the
 	// bare "unknown", and give the MAC prefix so the owner can match it.

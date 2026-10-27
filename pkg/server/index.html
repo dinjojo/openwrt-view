@@ -220,7 +220,7 @@
     .ov-hero { display: flex; align-items: center; gap: var(--s5); flex-wrap: wrap;
       padding-block: var(--s4) var(--s3); }
     .ov-verdict-c { display: flex; align-items: center; gap: 12px; text-align: left;
-      flex: 0 1 auto; min-width: 210px; }
+      flex: 0 1 auto; min-width: 110px; }
     .ov-verdict-ic { width: 30px; height: 30px; border-radius: 50%; flex: none;
       display: inline-flex; align-items: center; justify-content: center;
       background: var(--well); color: var(--ink-2); }
@@ -239,15 +239,15 @@
     /* Topology: one chain of colored icon chips — Internet → router →
        AP → satellites → clients. Each hop has its own hue so the chain
        reads at a glance. */
-    .ov-topo { flex: 1 1 460px; display: flex; align-items: center; justify-content: flex-end;
+    .ov-topo { flex: 1 1 460px; display: flex; align-items: center; justify-content: center;
       flex-wrap: wrap; row-gap: 6px; min-width: 0; }
-    .topo-node { display: flex; flex-direction: row; align-items: center; gap: 9px;
-      padding: 5px 12px 5px 5px; border-radius: 12px; transition: background .15s; text-align: left; }
+    .topo-node { display: flex; flex-direction: row; align-items: center; gap: 8px;
+      padding: 5px 10px 5px 5px; border-radius: 12px; transition: background .15s; text-align: left; }
     .topo-node:hover { background: var(--well); }
-    .topo-ic { width: 50px; height: 50px; border-radius: 13px; flex: none;
+    .topo-ic { width: 40px; height: 40px; border-radius: 11px; flex: none;
       background: color-mix(in srgb, var(--accent) 10%, var(--panel)); color: var(--accent);
       display: inline-flex; align-items: center; justify-content: center; }
-    .topo-ic svg { width: 40px; height: 40px; }
+    .topo-ic svg { width: 30px; height: 30px; }
     .topo-ic.k-globe   { background: color-mix(in srgb, #2563eb 13%, var(--panel)); color: #3b82f6; }
     .topo-ic.k-router  { background: color-mix(in srgb, #8b5cf6 14%, var(--panel)); color: #8b5cf6; }
     .topo-ic.k-ap      { background: color-mix(in srgb, #14b8a6 14%, var(--panel)); color: #14b8a6; }
@@ -269,8 +269,8 @@
     .topo-sub { font-size: var(--t-2xs); color: var(--ink-2); text-align: left; white-space: nowrap; }
     .topo-node.offline { opacity: .55; }
     .topo-node.offline .topo-ic { background: var(--well); color: var(--ink-3); }
-    .topo-link { flex: 0 1 54px; min-width: 44px; display: flex; flex-direction: column;
-      align-items: center; justify-content: center; gap: 2px; padding: 0 2px; }
+    .topo-link { flex: 0 0 auto; min-width: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 2px; padding: 0 4px; }
     .topo-link-line { width: 100%; height: 2px; border-radius: 1px;
       background: linear-gradient(90deg, var(--groove), var(--accent)); opacity: .6; }
     .topo-link.offline .topo-link-line {
@@ -312,6 +312,7 @@
     .ov-tile { width: 44px; height: 44px; border-radius: 12px;
       background: color-mix(in srgb, var(--accent) 10%, var(--panel)); color: var(--accent);
       display: inline-flex; align-items: center; justify-content: center; flex: none; }
+    .ov-tile.real, .dev-real { background: rgba(255, 255, 255, .94); }
     .ov-gauges { display: flex; flex-direction: column; gap: var(--s2); margin-bottom: var(--s3); }
     #ov-gauges .gauge { grid-template-columns: 7.5rem 1fr auto 64px; }
     .gauge-lab { font-size: var(--t-sm); color: var(--ink-2); }
@@ -845,7 +846,7 @@
         <section class="sect ov-card">
           <div class="ov-card-cap"><span class="ov-cap-t">Gateway</span><span id="ov-gw-state" class="ov-cap-state" data-state="ok">Online</span></div>
           <div class="ov-gw-name">
-            <span class="ov-tile"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6.01 18H6"/><path d="M10.01 18H10"/><path d="M15 18v-4"/><path d="M17.7 7.7a7.5 7.5 0 0 0-11.4 0"/><path d="M20.1 4.6a11 11 0 0 0-16.2 0"/></svg></span>
+            <span class="ov-tile" id="ov-gw-tile"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6.01 18H6"/><path d="M10.01 18H10"/><path d="M15 18v-4"/><path d="M17.7 7.7a7.5 7.5 0 0 0-11.4 0"/><path d="M20.1 4.6a11 11 0 0 0-16.2 0"/></svg></span>
             <div><b>NanoPi R6C</b><span class="xs muted block">Router · OpenWrt · CAKE</span></div>
           </div>
           <div id="ov-gauges" class="ov-gauges"></div>
@@ -3085,7 +3086,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           ' data-ip="' + h(c.ip) + '" data-vendor="' + h(c.vendor || '') + '"' +
           ' title="View connection history" tabindex="0">' +
           '<td>' +
-            '<span class="cl-ic">' + devIcon(c, 14) + '</span>' +
+            '<span class="cl-ic">' + realIcon(brandIconURL(c.name) || brandIconURL(c.vendor), devIcon(c, 14), 22) + '</span>' +
             '<span class="strong ink">' + h(c.name || c.mac) + '</span>' +
             '<span class="num xs muted block mt1">' + (s.wifi ? sigHTML : '') + sub + '</span>' +
           '</td>' +
@@ -4641,7 +4642,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     function ovMbit(bps) {
       if (bps == null || isNaN(bps)) return '–';
       const mb = bps * 8 / 1e6;
-      return mb >= 100 ? mb.toFixed(0) : mb >= 10 ? mb.toFixed(1) : mb.toFixed(2);
+      return mb >= 100 ? mb.toFixed(0) : mb.toFixed(1);
     }
 
     // ── Overview hero: verdict, topology, line health ─────────────────────
@@ -4784,6 +4785,15 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         '<span class="dev-real-fb">' + fallback + '</span></span>';
     }
 
+    // Gateway card: the NanoPi's real render replaces the line-glyph tile
+    // (the original SVG stays underneath as the offline fallback).
+    (function () {
+      const t = document.getElementById('ov-gw-tile');
+      if (!t) return;
+      t.classList.add('real');
+      t.innerHTML = realIcon(ICON_CDN + 'openwrt.png', t.innerHTML, 38);
+    })();
+
     function topoLink(id, label, offline) {
       return '<span class="topo-link' + (offline ? ' offline' : '') + '"><span class="topo-link-line"></span>' +
         '<span class="topo-rate" id="' + id + '">' + label + '</span></span>';
@@ -4853,6 +4863,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
      *  interface stats, per-AP sums from the cached client list. No DOM
      *  rebuild, so it can run on every sample. */
     function topoRateHtml(dn, up) {
+      // An idle link collapses to just the line — a "0.0↓ 0.0↑" label
+      // spends width the chain does not have.
+      if (dn * 8 / 1e6 < 0.005 && up * 8 / 1e6 < 0.005) return '';
       return '<span class="dn">' + ovMbit(dn) + '↓</span> <span class="upv">' + ovMbit(up) + '↑</span>';
     }
     /** Rates grouped by which unit each client hangs off. The Orbi
@@ -5141,14 +5154,17 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         const rows = [];
         const rbrMac = Object.keys(perAp).find(k => k !== '__router' && !satMacs[k]);
         const rbrN = (perAp.__router || []).length + (perAp[rbrMac] || []).length;
-        rows.push('<button class="ov-ap-row" data-tab-jump="clients"><span class="ov-ap-dot"></span>' +
+        rows.push('<button class="ov-ap-row" data-tab-jump="clients">' +
+          realIcon(ICON_CDN + 'netgear-orbi.png', '<span class="ov-ap-dot"></span>', 24) +
           '<span class="n">' + h(lastOrbi.model || 'Orbi router') + ' · AP</span>' +
           '<span class="cnt">' + rbrN + ' clients</span></button>');
         (lastOrbi.satellites || []).forEach((s, i) => {
           const k = (s.mac || '').toUpperCase();
           const off = s.online === false;
           const n = (perAp[k] || []).length;
-          rows.push('<button class="ov-ap-row" data-tab-jump="clients"><span class="ov-ap-dot' + (off ? ' off' : '') + '"></span>' +
+          rows.push('<button class="ov-ap-row" data-tab-jump="clients">' +
+            '<span style="opacity:' + (off ? '.45' : '1') + ';display:inline-flex">' +
+            realIcon(ICON_CDN + 'netgear-orbi.png', '<span class="ov-ap-dot' + (off ? ' off' : '') + '"></span>', 24) + '</span>' +
             '<span class="n">' + h(s.model || s.name || s.mac) + ' · Satellite' + (off ? ' — offline' : '') + '</span>' +
             '<span class="cnt">' + (off ? '—' : n + ' clients') + '</span></button>');
         });
@@ -5199,6 +5215,17 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         lastOrbi ? (lastOrbi.devices || []).length + ' seen' : ''));
       (lastOrbi && lastOrbi.satellites || []).forEach(s => {
         rows.push(shRow(h(s.model || s.name || s.mac) + ' (Satellite)', s.online === false ? 'crit' : 'ok'));
+      });
+      // Anything else that degrades the verdict must be visible under
+      // "see below": append every non-minor check that is not one of the
+      // curated rows above and is not plain ok. Without this the header
+      // could say "Service issue" while every visible row stayed green
+      // (e.g. Wi-Fi signal flagged a weak client that had no row).
+      const covered = ['ISP session', 'Latency under load', 'Exit path (WARP)', 'Traffic shaping',
+        'Router CPU', 'WiFi AP', 'Wi-Fi AP'];
+      hchecks.forEach(c => {
+        if (!c || c.minor || c.state === 'ok' || c.state === 'unknown' || covered.indexOf(c.name) >= 0) return;
+        rows.push(shRow(h(c.name), c.state, c.value || ''));
       });
       document.getElementById('ov-syshealth').innerHTML = rows.join('');
       const shSt = document.getElementById('ov-sh-state');
