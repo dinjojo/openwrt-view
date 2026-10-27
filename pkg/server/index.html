@@ -277,12 +277,18 @@
     .ov-winbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
       padding: 4px 2px; margin-bottom: var(--s2); }
 
-    /* Internet card */
-    .ov-big { display: flex; gap: var(--s6); }
-    .ov-big-num { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-    .ov-big-num.ov-dl { color: var(--dl); }
-    .ov-big-num.ov-ul { color: var(--ul); }
-    .ov-big-lab { font-size: var(--t-xs); color: var(--ink-2); }
+    /* Internet card — Firewalla-style WAN Throughput: the two live rates
+       side by side (colored arrows, ink values) over one two-tone area
+       sparkline. */
+    .ov-wan-live { display: flex; gap: var(--s6); align-items: baseline; }
+    .ov-dir { display: flex; gap: 6px; align-items: baseline; }
+    .ov-dir .num { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+    .ov-dir-lab { font-size: var(--t-xs); color: var(--ink-2); }
+    #ov-int-chart svg { width: 100%; height: 88px; display: block; margin-top: var(--s2); }
+    /* Within this card the arrows match the sparkline palette (Firewalla's
+       orange-up / blue-down), not the theme's green upload series. */
+    #ov-wan-card .ov-arrow.ul { color: #f59e0b; }
+    #ov-wan-card .ov-arrow.dl { color: #0069ff; }
     .ov-arrow { font-weight: 700; }
     .ov-arrow.dl { color: var(--dl); }
     .ov-arrow.ul { color: var(--ul); }
@@ -798,15 +804,13 @@
 
       <!-- Row 1: Internet · Gateway · Network -->
       <div class="ov-grid ov-g3">
-        <section class="sect ov-card">
-          <div class="ov-card-cap"><span class="ov-cap-t">Internet</span></div>
-          <div class="ov-big">
-            <div class="ov-big-cell"><div class="ov-big-num ov-dl" id="ov-down">–</div>
-              <div class="ov-big-lab"><span class="ov-arrow dl">↓</span> Mbps down</div></div>
-            <div class="ov-big-cell"><div class="ov-big-num ov-ul" id="ov-up">–</div>
-              <div class="ov-big-lab"><span class="ov-arrow ul">↑</span> Mbps up</div></div>
+        <section class="sect ov-card" id="ov-wan-card">
+          <div class="ov-card-cap"><span class="ov-cap-t">WAN Throughput</span><span class="ov-cap-sub">live, updates every second</span></div>
+          <div class="ov-wan-live">
+            <span class="ov-dir"><span class="ov-arrow ul">↑</span><b class="num" id="ov-up">–</b><span class="ov-dir-lab">Mb/s up</span></span>
+            <span class="ov-dir"><span class="ov-arrow dl">↓</span><b class="num" id="ov-down">–</b><span class="ov-dir-lab">Mb/s down</span></span>
           </div>
-          <div id="ov-int-chart"></div>
+          <div id="ov-int-chart" role="img" aria-label="Download and upload throughput sparkline"></div>
           <div id="ov-int-stats" class="sm muted" style="display:grid;grid-template-columns:auto repeat(3, minmax(3.4rem,auto)) auto;column-gap:12px;row-gap:2px;align-items:baseline;margin-top:2px" title="now / average / peak over the charted window (10 s samples)"></div>
           <div id="ov-warp" class="sm muted ov-foot"></div>
           <button id="ov-internet" class="link" title="Open line diagnostics (tunnel, latency quality, buffering)">Line diagnostics
@@ -1549,6 +1553,60 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     // blue down, orange up, the same two-tone Firewalla uses.
     const SPARK_DL = '#0069ff', SPARK_UL = '#f59e0b';
     const sparkColor = iface => /ifb/i.test(iface) ? SPARK_DL : SPARK_UL;
+
+    /**
+     * Firewalla WAN-Throughput sparkline: download (blue) and upload
+     * (orange) traces overlaid in one zero-based gradient area chart,
+     * shared scale, no axes. Null samples (shaper-cap blanks) split a
+     * trace into segments instead of pulling the area to zero.
+     */
+    function drawDualSparkline(svg, down, up, gidD, gidU) {
+      if (!svg) return;
+      const dn = down || [], ul = up || [];
+      if (dn.length + ul.length < 4) { svg.innerHTML = ''; return; }
+      const W = 100, H = 28, PAD = 2;
+      const max = Math.max(
+        ...dn.filter(v => v != null), ...ul.filter(v => v != null), 1e-9);
+      const n = Math.max(dn.length, ul.length) - 1;
+      const xy = (v, i) =>
+        (PAD + (i / n) * (W - 2 * PAD)).toFixed(1) + ',' +
+        (H - PAD - ((v || 0) / max) * (H - 2 * PAD)).toFixed(1);
+      // Contiguous non-null runs become polygon+polyline pairs; nulls
+      // (capped outliers) break the trace so gaps stay honest.
+      const series = (arr, color, gid) => {
+        let html = '', run = [];
+        const flush = () => {
+          if (run.length >= 2) {
+            const pts = run.map(p => p.join(',')).join(' ');
+            html +=
+              '<polygon points="' + PAD + ',' + (H - PAD) + ' ' + pts + ' ' +
+                run[run.length - 1][0] + ',' + (H - PAD) +
+                '" fill="url(#' + gid + ')"/>' +
+              '<polyline points="' + pts + '" fill="none" stroke="' + color +
+                '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" ' +
+                'vector-effect="non-scaling-stroke"/>';
+          }
+          run = [];
+        };
+        arr.forEach((v, i) => { if (v == null) flush(); else run.push([xy(v, i)]); });
+        flush();
+        return html;
+      };
+      svg.innerHTML =
+        '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
+          '<defs>' +
+            '<linearGradient id="' + gidD + '" x1="0" y1="0" x2="0" y2="1">' +
+              '<stop offset="0%" stop-color="' + SPARK_DL + '" stop-opacity="0.40"/>' +
+              '<stop offset="100%" stop-color="' + SPARK_DL + '" stop-opacity="0.05"/>' +
+            '</linearGradient>' +
+            '<linearGradient id="' + gidU + '" x1="0" y1="0" x2="0" y2="1">' +
+              '<stop offset="0%" stop-color="' + SPARK_UL + '" stop-opacity="0.45"/>' +
+              '<stop offset="100%" stop-color="' + SPARK_UL + '" stop-opacity="0.05"/>' +
+            '</linearGradient>' +
+          '</defs>' +
+          series(dn, SPARK_DL, gidD) + series(ul, SPARK_UL, gidU) +
+        '</svg>';
+    }
 
     /** One KPI card: label, big value, sub-line, optional progress bar, optional sparkline. */
     function kpiCard(id, label, opts) {
@@ -4727,7 +4785,6 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     let ovWanData = null;    // /api/history/system 24h payload (chart + gauges)
     let ovWanAt = 0;         // when ovWanData was fetched
     let ovClients = null;    // last /api/clients payload (topology rate sums)
-    let ovIntPlot = null;    // Internet card chart
     let ovIntAt = '';        // payload stamp the chart was built from
     // Internet card window — one global window for every time-based panel:
     // charts, usage donut, top clients and events. 'billing' shows the
@@ -5086,7 +5143,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     function renderIntChart(d) {
       const cd = document.getElementById('ov-int-chart');
       const sub = document.getElementById('ov-int-sub');
-      if (!cd || !d || !d.t || d.t.length < 2 || !isUPlotReady() || cd.offsetParent === null) return;
+      if (!cd || !d || !d.t || d.t.length < 2 || cd.offsetParent === null) return;
       // A router restart can leave a few impossible rate samples in the
       // counter history (observed: 240 Gbit/s). The shaper bounds the
       // real line, so blank anything above 1.05× of it — the chart keeps
@@ -5116,12 +5173,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         }
       }
       cd.innerHTML = '';
-      if (ovIntPlot) { try { ovIntPlot.destroy(); } catch (_) {} ovIntPlot = null; }
-      ovIntPlot = makeChart(cd, Math.max(200, cd.clientWidth - 4), 90,
-        d.t.slice(-n), [
-          { label: 'Download (Mbit/s)', data: (d.wanrx || []).slice(-n), stroke: cv('--dl'), fill: cva('--dl', 0.10) },
-          { label: 'Upload (Mbit/s)', data: (d.wantx || []).slice(-n), stroke: cv('--ul') },
-        ], '', v => v.toFixed(1), 'ov-x');
+      // Firewalla-style two-tone area: blue download, orange upload, one
+      // shared zero-based scale over the charted window.
+      drawDualSparkline(cd, (d.wanrx || []).slice(-n), (d.wantx || []).slice(-n), 'g-ovint-dl', 'g-ovint-ul');
       // LuCI-style now / average / peak for the charted window, per
       // direction — derived from the same series the chart draws.
       const stats = document.getElementById('ov-int-stats');
@@ -5140,7 +5194,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         if (dl.length || ul.length) {
           const hdr = ['now', 'avg', 'peak'].map(l => `<span class="xs muted" style="text-align:right">${l}</span>`).join('');
           stats.innerHTML = '<span></span>' + hdr + '<span></span>' +
-            row('↓', 'dl', dl) + row('↑', 'ul', ul);
+            row('↑', 'ul', ul) + row('↓', 'dl', dl);
         } else stats.innerHTML = '';
       }
     }
