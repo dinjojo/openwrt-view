@@ -42,6 +42,19 @@ func (s *Server) SetLocation(loc *time.Location) {
 // disables). Call before Run.
 func (s *Server) SetUsageStore(u *usage.Store) { s.usage = u }
 
+// SetDataPlan records the household's monthly data allowance so /api/usage
+// can tell the UI to render the plan bar against the right billing period.
+// A cap of 0 (the default) means no plan is configured and the field is
+// omitted from the response. Call before Run.
+func (s *Server) SetDataPlan(capGB float64, resetDay int) {
+	s.planCapGB = capGB
+	if resetDay >= 1 && resetDay <= 31 {
+		s.planResetDay = resetDay
+	} else {
+		s.planResetDay = 1
+	}
+}
+
 // handleAPIRadio serves the local dongle's survey/scan snapshot;
 // ok:false (with err) when unconfigured or failing.
 func (s *Server) handleAPIRadio(c fiber.Ctx) error {
@@ -61,6 +74,13 @@ func (s *Server) handleAPIConfig(c fiber.Ctx) error {
 type usagePayload struct {
 	Days      []usage.Day `json:"days"`       // oldest first; days without data are absent
 	DaysTotal int         `json:"days_total"` // the window asked for
+	Plan      *dataPlan   `json:"plan,omitempty"`
+}
+
+// dataPlan mirrors the -plan-gb/-plan-reset-day flags for the UI's plan bar.
+type dataPlan struct {
+	CapGB    float64 `json:"cap_gb"`
+	ResetDay int     `json:"reset_day"`
 }
 
 func (s *Server) handleAPIUsage(c fiber.Ctx) error {
@@ -75,6 +95,9 @@ func (s *Server) handleAPIUsage(c fiber.Ctx) error {
 	out := usagePayload{Days: []usage.Day{}, DaysTotal: n}
 	if s.usage != nil {
 		out.Days = s.usage.Daily(n, time.Now())
+	}
+	if s.planCapGB > 0 {
+		out.Plan = &dataPlan{CapGB: s.planCapGB, ResetDay: s.planResetDay}
 	}
 	return c.JSON(out)
 }

@@ -17,13 +17,20 @@ import (
 // evalWarp judges the Cloudflare WARP exit tunnel. pbr runs with
 // strict_enforcement off, so when the tunnel dies, policy-routed clients
 // automatically fall back to the direct WAN line — the network keeps
-// working, just through a different path. That makes a dead tunnel an
-// informational note (Minor: "your exit path changed"), never a problem.
+// working, just through a different path. A missing wg0 interface means
+// WARP is simply switched off (e.g. the Sony-TV-only tunnel was stopped),
+// which is normal operation, not a problem: the check reads OK and says
+// everything is on the direct line. Only an interface that is up but not
+// passing traffic (no peer, no handshake) is worth a word of caution.
 func evalWarp(st sysmon.WarpState) Check {
 	name := "Exit path (WARP)"
+	if !st.IfaceUp {
+		return Check{Name: name, State: StateOK, Minor: true, Value: "direct WAN",
+			Detail: "the WARP tunnel interface is not up, so all traffic exits via the direct WAN line — normal when the tunnel is switched off. This check follows it automatically if WARP is turned back on.", NumState: 0}
+	}
 	if !st.Available {
-		return Check{Name: name, State: StateWarn, Minor: true, Value: "fallback",
-			Detail: "the WARP tunnel interface is gone — policy-routed clients are falling back to the direct WAN line. Internet keeps working through your ISP, just not through the tunnel. Check pbr/wireguard if you want the tunnel back.", NumState: 1}
+		return Check{Name: name, State: StateWarn, Minor: true, Value: "no peer",
+			Detail: "the WARP tunnel interface is up but has no configured peer — the tunnel cannot pass traffic. Policy-routed clients fall back to the direct WAN line.", NumState: 1}
 	}
 
 	detail := func(hs time.Time) string {
@@ -179,32 +186,5 @@ func trimAge(d time.Duration) string {
 		return fmt.Sprintf("%.1fh", d.Hours())
 	default:
 		return fmt.Sprintf("%.0fd", d.Hours()/24)
-	}
-}
-
-// evalWANRejects judges the unsolicited-traffic counters at the end of the
-// WAN firewall chains. A home router on a public IP is scanned constantly —
-// a large number of rejected packets is normal. The signal is deviation
-// from this network's own baseline, not the raw rate, so the verdict
-// compares the current rate against the last ~2h of samples.
-func evalWANRejects(st sysmon.FWState) Check {
-	name := "Unsolicited inbound"
-	if !st.Available {
-		return Check{Name: name, State: StateUnknown, Value: "—", NumState: -1,
-			Detail: "the firewall counters for unsolicited WAN traffic are missing — the openwrt-view nftables include may have been removed"}
-	}
-	rate := st.InDropsPerMin + st.FwdDropsPerMin
-	median := st.Median
-
-	switch {
-	case rate >= 5000 && (median == 0 || rate >= 50*median):
-		return Check{Name: name, State: StateCrit, Value: fmt.Sprintf("%.0f/min", rate),
-			Detail: fmt.Sprintf("the internet is flooding your WAN: %.0f unwanted packets/min, far above your normal %.0f/min. Usually a scan wave and harmless (the firewall rejects them), but a sustained flood is worth checking whether something is hammering a port forward.", rate, median), NumState: 2}
-	case rate >= 500 && (median == 0 || rate >= 10*median):
-		return Check{Name: name, State: StateWarn, Value: fmt.Sprintf("%.0f/min", rate),
-			Detail: fmt.Sprintf("unwanted inbound traffic is elevated: %.0f packets/min vs your usual %.0f/min. Background scanning comes in waves — only worry if it stays this high for hours.", rate, median), NumState: 1}
-	default:
-		return Check{Name: name, State: StateOK, Value: fmt.Sprintf("%.0f/min", rate),
-			Detail: fmt.Sprintf("the firewall is rejecting about %.0f unwanted packets/min from the internet — normal background scanning. This chip compares against your network's own baseline, so it only speaks up when the level jumps.", rate), NumState: 0}
 	}
 }

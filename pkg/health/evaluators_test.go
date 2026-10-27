@@ -277,16 +277,20 @@ func TestEvalWarp(t *testing.T) {
 		in   sysmon.WarpState
 		w    want
 	}{
-		{"interface gone", sysmon.WarpState{}, want{state: StateWarn, value: "fallback", contains: []string{"falling back"}}},
-		{"never handshaked", sysmon.WarpState{Available: true, PeerCount: 1},
+		// wg0 missing entirely = WARP switched off — normal operation,
+		// traffic is on the direct line, and nothing is wrong.
+		{"interface off (not running)", sysmon.WarpState{}, want{state: StateOK, value: "direct WAN", contains: []string{"direct WAN"}}},
+		{"interface up, no peer", sysmon.WarpState{IfaceUp: true, Available: false},
+			want{state: StateWarn, value: "no peer", contains: []string{"no configured peer"}}},
+		{"never handshaked", sysmon.WarpState{IfaceUp: true, Available: true, PeerCount: 1},
 			want{state: StateWarn, value: "no handshake", contains: []string{"never completed a handshake"}}},
-		{"healthy idle", sysmon.WarpState{Available: true, PeerCount: 1, Handshake: ago(30 * time.Second), RxPerS: 100},
+		{"healthy idle", sysmon.WarpState{IfaceUp: true, Available: true, PeerCount: 1, Handshake: ago(30 * time.Second), RxPerS: 100},
 			want{state: StateOK, value: "via WARP", contains: []string{"healthy", "no traffic flowing"}}},
-		{"healthy with traffic", sysmon.WarpState{Available: true, PeerCount: 1, Handshake: ago(time.Minute), RxPerS: 2 * 1024 * 1024},
+		{"healthy with traffic", sysmon.WarpState{IfaceUp: true, Available: true, PeerCount: 1, Handshake: ago(time.Minute), RxPerS: 2 * 1024 * 1024},
 			want{state: StateOK, value: "via WARP", contains: []string{"~2.0 MiB/s flowing in"}}},
-		{"stalled", sysmon.WarpState{Available: true, PeerCount: 1, Handshake: ago(5 * time.Minute)},
+		{"stalled", sysmon.WarpState{IfaceUp: true, Available: true, PeerCount: 1, Handshake: ago(5 * time.Minute)},
 			want{state: StateWarn, value: "quiet 5m", contains: []string{"stalled"}}},
-		{"down", sysmon.WarpState{Available: true, PeerCount: 1, Handshake: ago(time.Hour)},
+		{"down", sysmon.WarpState{IfaceUp: true, Available: true, PeerCount: 1, Handshake: ago(time.Hour)},
 			want{state: StateWarn, value: "fallback", contains: []string{"down (no handshake for 1.0h)"}}},
 	}
 	for _, c := range cases {
@@ -386,35 +390,6 @@ func TestEvalStorage(t *testing.T) {
 	}
 }
 
-func TestEvalWANRejects(t *testing.T) {
-	cases := []struct {
-		name string
-		in   sysmon.FWState
-		w    want
-	}{
-		{"counters missing", sysmon.FWState{}, want{state: StateUnknown, value: "—"}},
-		{"background noise", sysmon.FWState{Available: true, InDropsPerMin: 80, FwdDropsPerMin: 20, Median: 90},
-			want{state: StateOK, value: "100/min"}},
-		{"elevated without baseline", sysmon.FWState{Available: true, InDropsPerMin: 600},
-			want{state: StateWarn, value: "600/min"}},
-		{"high but normal for this network", sysmon.FWState{Available: true, InDropsPerMin: 600, Median: 100},
-			want{state: StateOK}},
-		{"elevated vs baseline", sysmon.FWState{Available: true, InDropsPerMin: 1500, Median: 100},
-			want{state: StateWarn, contains: []string{"1500 packets/min vs your usual 100/min"}}},
-		{"flood without baseline", sysmon.FWState{Available: true, InDropsPerMin: 4000, FwdDropsPerMin: 2000},
-			want{state: StateCrit, value: "6000/min", contains: []string{"flooding"}}},
-		{"big but only 30x baseline is warn", sysmon.FWState{Available: true, InDropsPerMin: 6000, Median: 200},
-			want{state: StateWarn}},
-		{"flood vs baseline", sysmon.FWState{Available: true, InDropsPerMin: 20000, Median: 100},
-			want{state: StateCrit}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			checkCommon(t, evalWANRejects(c.in), "Unsolicited inbound", c.w)
-		})
-	}
-}
-
 func TestEvalClientsUnavailable(t *testing.T) {
 	for _, s := range []*clients.Store{nil, {}} {
 		c := evalClients(s)
@@ -461,7 +436,7 @@ func TestOrbiLabelsAndBands(t *testing.T) {
 func TestNilSafeSnapshots(t *testing.T) {
 	for _, sys := range []*sysmon.Pollers{nil, {}} {
 		if warpSnap(sys).Available || clockSnap(sys).Available || diskSnap(sys).Available ||
-			fwSnap(sys).Available || connSnap(sys).Max != 0 {
+			connSnap(sys).Max != 0 {
 			t.Errorf("snapshots of %v must be zero", sys)
 		}
 	}
@@ -471,7 +446,7 @@ func TestNilSafeSnapshots(t *testing.T) {
 	// The zero snapshots must map to non-alarming states for sysmon checks
 	// whose data is simply missing.
 	if evalClock(clockSnap(nil)).State != StateUnknown || evalStorage(diskSnap(nil)).State != StateUnknown ||
-		evalWANRejects(fwSnap(nil)).State != StateUnknown || evalConntrack(connSnap(nil)).State != StateUnknown ||
+		evalConntrack(connSnap(nil)).State != StateUnknown ||
 		evalPPPoE(pppoeSnap(nil)).State != StateUnknown {
 		t.Error("missing sysmon data must report unknown")
 	}

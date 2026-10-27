@@ -68,7 +68,8 @@ func main() {
 	showVer := flag.Bool("version", false, "print version and exit")
 	ebpfIface := flag.String("acct-ebpf", "", "interface to count per-device traffic on with eBPF (e.g. br-lan; empty disables the spike collector)")
 	wanEbpf := flag.String("wan-ebpf", "", "WAN-edge eBPF collectors as wan,ifb,lan (e.g. eth0,ifb4eth0,br-lan; empty disables)")
-	netifySock := flag.String("netify-sock", envOr("NETIFY_SOCK", "/var/run/netifyd/netifyd.sock"), "netifyd DPI agent's JSON export socket; empty disables the per-app aggregates")
+	planGB := flag.Float64("plan-gb", 0, "monthly data plan cap in GB; 0 hides the plan bar")
+	planResetDay := flag.Int("plan-reset-day", 1, "day of month the data plan resets (1-31)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "openwrt-view %s\n\n", Version)
@@ -198,7 +199,6 @@ func main() {
 			log.Logger.Warn().Err(err).Msg("WAN eBPF collectors unavailable; continuing without them")
 		}
 	}
-	srv.EnableNetify(*netifySock)
 	if *tapoHost != "" {
 		srv.SetTapoPoller(tapo.New(tapo.Config{Host: *tapoHost, User: *tapoUser, Pass: *tapoPass}, nil))
 		log.Logger.Info().Str("host", *tapoHost).Msg("Tapo plug monitoring enabled")
@@ -217,6 +217,7 @@ func main() {
 		us.SetLocation(loc)
 		srv.SetUsageStore(us)
 	}
+	srv.SetDataPlan(*planGB, *planResetDay)
 	if err := srv.Run(ctx, addr); err != nil {
 		log.Logger.Fatal().Err(err).Msg("fatal")
 	}

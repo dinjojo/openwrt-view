@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +27,7 @@ import (
 // WarpState is the latest WARP tunnel snapshot from `wg show wg0 dump`.
 type WarpState struct {
 	Available  bool      // wg0 exists and wg answered for it
+	IfaceUp    bool      // the wg0 interface exists at all — false means WARP is off, not broken
 	PeerCount  int       // configured peers (1 for this WARP setup)
 	Endpoint   string    // remote peer endpoint, e.g. 162.159.192.1:2408
 	Handshake  time.Time // zero if the peer never completed a handshake
@@ -85,6 +85,8 @@ func (p *WarpPoller) refresh() {
 	st := WarpState{At: time.Now()}
 	out, err := exec.Command("wg", "show", "wg0", "dump").Output()
 	if err == nil {
+		// wg answered, so the interface exists — WARP is on.
+		st.IfaceUp = true
 		for i, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			f := strings.Split(line, "\t")
 			if len(f) < 5 {
@@ -457,144 +459,6 @@ func uptimeSec() float64 {
 	return up
 }
 
-// ---------- Firewall counters (unsolicited WAN traffic) ----------
-
-// FWState is the latest snapshot of the passive WAN firewall counters that
-// sit at the end of the input_wan/forward_wan chains (installed via
-// /usr/share/nftables.d/ruleset-post/40-openwrt-view.nft). They count exactly
-// the packets fw4 is about to policy-drop: unsolicited internet noise.
-type FWState struct {
-	Available      bool
-	InDropsPerMin  float64 // unsolicited inbound, per minute
-	FwdDropsPerMin float64 // unsolicited forwarded, per minute
-	Median         float64 // median recent total rate — the network's own baseline
-	TotalIn        uint64
-	TotalFwd       uint64
-	At             time.Time
-}
-
-// fwHistCap keeps ~2h of per-poll rates for the deviation-based verdict.
-const fwHistCap = 240
-
-// FWPoller refreshes the counters every 30 seconds and keeps a rolling rate
-// history so the health check can compare "now" against this network's own
-// normal background-scan level instead of a fixed threshold.
-type FWPoller struct {
-	mu     sync.RWMutex
-	state  FWState
-	prevIn uint64
-	prevFw uint64
-	prevOK bool
-	hist   []float64 // per-minute total rates, most recent last
-}
-
-// NewFW starts the poller with a synchronous first snapshot.
-func NewFW(ctx context.Context) *FWPoller {
-	p := &FWPoller{}
-	p.refresh()
-	go p.loop(ctx)
-	return p
-}
-
-// Snapshot returns the latest known firewall counter state.
-func (p *FWPoller) Snapshot() FWState {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.state
-}
-
-// History returns a copy of the rolling per-minute rate samples.
-func (p *FWPoller) History() []float64 {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	out := make([]float64, len(p.hist))
-	copy(out, p.hist)
-	return out
-}
-
-func (p *FWPoller) loop(ctx context.Context) {
-	t := time.NewTicker(30 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			p.refresh()
-		}
-	}
-}
-
-// nftCounterPackets runs `nft list chain` and returns the packet count of
-// the first rule whose text contains the given needle.
-func nftCounterPackets(chain string, needle string) (uint64, bool) {
-	out, err := exec.Command("nft", "list", "chain", "inet", "fw4", chain).Output()
-	if err != nil {
-		return 0, false
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if !strings.Contains(line, needle) {
-			continue
-		}
-		if i := strings.Index(line, "counter packets "); i >= 0 {
-			rest := line[i+len("counter packets "):]
-			if j := strings.IndexByte(rest, ' '); j > 0 {
-				v, err := strconv.ParseUint(rest[:j], 10, 64)
-				return v, err == nil
-			}
-		}
-	}
-	return 0, false
-}
-
-// medianRate returns the median of the rolling rate samples (the network's
-// own background-scan baseline).
-func medianRate(v []float64) float64 {
-	if len(v) == 0 {
-		return 0
-	}
-	sorted := append([]float64(nil), v...)
-	sort.Float64s(sorted)
-	return sorted[len(sorted)/2]
-}
-
-func (p *FWPoller) refresh() {
-	st := FWState{At: time.Now()}
-
-	inEnd, okIn := nftCounterPackets("input_wan", "openwrt-view: unsolicited inbound")
-	inRej, okRej := nftCounterPackets("reject_from_wan", "jump handle_reject")
-	fwEnd, okFw := nftCounterPackets("forward_wan", "openwrt-view: unsolicited forward")
-	st.TotalIn = inEnd + inRej
-	st.TotalFwd = fwEnd
-	st.Available = okIn && okRej && okFw
-
-	if st.Available && p.prevOK {
-		elapsed := 30.0
-		if !p.state.At.IsZero() {
-			elapsed = st.At.Sub(p.state.At).Seconds()
-		}
-		if elapsed > 0 {
-			// Counters reset to zero on firewall reloads. Compare as
-			// unsigned before subtracting (diffRate): subtracting first
-			// wraps the uint64 to ~1.8e19 and a float clamp never fires.
-			// A reset interval reads as 0; the new counter becomes the
-			// baseline below.
-			st.InDropsPerMin = diffRate(st.TotalIn, p.prevIn, elapsed) * 60
-			st.FwdDropsPerMin = diffRate(st.TotalFwd, p.prevFw, elapsed) * 60
-			p.hist = append(p.hist, st.InDropsPerMin+st.FwdDropsPerMin)
-			if len(p.hist) > fwHistCap {
-				p.hist = p.hist[len(p.hist)-fwHistCap:]
-			}
-			st.Median = medianRate(p.hist)
-		}
-	}
-	p.prevIn, p.prevFw, p.prevOK = st.TotalIn, st.TotalFwd, st.Available
-
-	p.mu.Lock()
-	p.state = st
-	p.mu.Unlock()
-}
-
 // ---------- grouped access for the health package ----------
 
 // Pollers groups all sysmon pollers so the health package takes a single
@@ -603,7 +467,6 @@ type Pollers struct {
 	Warp  *WarpPoller
 	Clock *ClockPoller
 	Disk  *DiskPoller
-	FW    *FWPoller
 	Conn  *ConnPoller
 	Pbr   *PbrPoller
 }
@@ -614,7 +477,6 @@ func NewAll(ctx context.Context) *Pollers {
 		Warp:  NewWarp(ctx),
 		Clock: NewClock(ctx),
 		Disk:  NewDisk(ctx, "/dev/nvme0"),
-		FW:    NewFW(ctx),
 		Conn:  NewConntrack(ctx),
 		Pbr:   NewPbr(ctx),
 	}

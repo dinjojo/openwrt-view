@@ -29,7 +29,6 @@ import (
 	"github.com/dinjojo/openwrt-view/pkg/health"
 	"github.com/dinjojo/openwrt-view/pkg/history"
 	"github.com/dinjojo/openwrt-view/pkg/log"
-	"github.com/dinjojo/openwrt-view/pkg/netify"
 	"github.com/dinjojo/openwrt-view/pkg/orbi"
 	"github.com/dinjojo/openwrt-view/pkg/orbissn"
 	"github.com/dinjojo/openwrt-view/pkg/parser"
@@ -66,7 +65,8 @@ type Server struct {
 	healthCache  []health.Check
 	healthAt     time.Time
 	clientStore  *clients.Store
-	netify       *netify.Collector   // netifyd DPI aggregates; nil unless the socket exists
+	planCapGB    float64             // monthly data plan cap (0 = no plan configured)
+	planResetDay int                 // day of month the plan resets (1-31)
 	ebpf         *ebpfacct.Collector // eBPF per-device counters; nil unless EnableEBPFAcct
 	destTrack    *destTrack          // per-device per-destination day totals; nil until the ebpf poller starts
 	wanbpf       *wanbpf.Collector   // WAN-edge eBPF collectors; nil unless EnableWANBPF
@@ -138,7 +138,6 @@ func New(addr string, interval time.Duration, histCap int, vmURL, version string
 	app.Get("/api/orbi", s.handleAPIOrbi)
 	app.Get("/api/tapo", s.handleAPITapo)
 	app.Get("/api/dns", s.handleAPIDNS)
-	app.Get("/api/apps", s.handleAPIApps)
 	app.Get("/api/radio", s.handleAPIRadio)
 	app.Get("/api/config", s.handleAPIConfig)
 	app.Get("/api/report", s.handleAPIReport)
@@ -163,9 +162,6 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 		s.events.SetHook(func(kind, sev, msg string) { s.alerts.Notify(kind, sev, msg) })
 	}
 	s.events.Add("monitor", "info", "Monitor restarted ("+s.version+") — watching WAN, WARP and Cake")
-	if s.netify != nil {
-		go s.netify.Run(ctx)
-	}
 	if s.orbi.Enabled() {
 		s.orbi.SetEventHook(s.events.Add)
 		s.orbi.SetNameResolver(s.clientStore.Name)
@@ -201,15 +197,6 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	}()
 	log.Logger.Info().Str("addr", addr).Dur("interval", s.pollInterval).Msg("listening")
 	return s.app.Listen(addr)
-}
-
-// EnableNetify turns on the netifyd DPI aggregates (which device used
-// which app) served at /api/apps. The collector reconnects on its own;
-// pass the empty string to disable.
-func (s *Server) EnableNetify(sockPath string) {
-	if sockPath != "" {
-		s.netify = netify.New(sockPath)
-	}
 }
 
 // EnableEBPFAcct attaches the eBPF per-device byte counters to iface and
@@ -1358,45 +1345,6 @@ func (s *Server) handleAPIDNS(c fiber.Ctx) error {
 		st.TopClients = resolved
 	}
 	b, _ := json.Marshal(st)
-	return c.Send(b)
-}
-
-// handleAPIApps serves the netifyd DPI aggregates: per application, the
-// devices that used it (with resolved friendly names) and byte totals
-// for the aggregation window (since daemon start). 503 when netifyd is
-// not installed — the UI hides the panel.
-func (s *Server) handleAPIApps(c fiber.Ctx) error {
-	if s.netify == nil {
-		return c.Status(503).SendString(`{"error":"netifyd not configured"}`)
-	}
-	snap := s.netify.Snapshot()
-	type devOut struct {
-		netify.DeviceRow
-		Name string `json:"name"`
-	}
-	type appOut struct {
-		Tag    string        `json:"tag"`
-		Name   string        `json:"name"`
-		Host   string        `json:"host"`
-		Down   int64         `json:"down"`
-		Up     int64         `json:"up"`
-		Total  int64         `json:"total"`
-		Trend  *netify.Trend `json:"trend,omitempty"`
-		Device []devOut      `json:"device"`
-	}
-	out := struct {
-		netify.Snapshot
-		Apps []appOut `json:"apps"`
-	}{Snapshot: netify.Snapshot{Started: snap.Started, Flows: snap.Flows, Unknown: snap.Unknown}}
-	for _, a := range snap.Apps {
-		o := appOut{Tag: a.Tag, Name: a.Name, Host: a.Host, Down: a.Down, Up: a.Up, Total: a.Total, Trend: a.Trend}
-		for _, d := range a.Device {
-			o.Device = append(o.Device, devOut{DeviceRow: d, Name: s.clientStore.Name(d.MAC)})
-		}
-		out.Apps = append(out.Apps, o)
-	}
-	c.Set("Content-Type", "application/json; charset=utf-8")
-	b, _ := json.Marshal(out)
 	return c.Send(b)
 }
 

@@ -82,7 +82,6 @@ func Eval(ctx context.Context, client *vm.Client, live []types.CakeStats, hist *
 		evalClients(store),
 		evalSystem(ctx, client),
 		evalStorage(diskSnap(sys)),
-		evalWANRejects(fwSnap(sys)),
 		evalConntrack(connSnap(sys)),
 		evalAccounting(ctx, client),
 	}
@@ -124,14 +123,6 @@ func diskSnap(sys *sysmon.Pollers) sysmon.DiskState {
 	return sys.Disk.Snapshot()
 }
 
-// fwSnap safely reads the firewall poller state (nil-safe).
-func fwSnap(sys *sysmon.Pollers) sysmon.FWState {
-	if sys == nil || sys.FW == nil {
-		return sysmon.FWState{}
-	}
-	return sys.FW.Snapshot()
-}
-
 // connSnap safely reads the conntrack poller state (nil-safe).
 func connSnap(sys *sysmon.Pollers) sysmon.ConnState {
 	if sys == nil || sys.Conn == nil {
@@ -168,6 +159,7 @@ func evalConntrack(st sysmon.ConnState) Check {
 }
 
 // pppoeSnap safely reads the poller state (nil-safe).
+
 func pppoeSnap(wp *wan.Poller) wan.State {
 	if wp == nil {
 		return wan.State{}

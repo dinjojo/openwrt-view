@@ -341,6 +341,18 @@
     .ov-usage-row .nm { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); min-width: 0; }
     .ov-usage-row .gb { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
     .ov-usage-row .pc { color: var(--ink-2); min-width: 2.6rem; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    /* Monthly data plan bar (Orbi-style: cap + reset day + on-pace figure) */
+    .ov-plan-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+      font-size: var(--t-xs); color: var(--ink-2); margin-bottom: 5px; }
+    .ov-plan-head b { color: var(--ink); font-variant-numeric: tabular-nums; }
+    .ov-plan-head .num { font-variant-numeric: tabular-nums; }
+    .ov-plan-bar { height: 6px; border-radius: 4px; background: var(--well); overflow: hidden; }
+    .ov-plan-bar i { display: block; height: 100%; border-radius: 4px; min-width: 2px;
+      background: linear-gradient(90deg, #0069ff, #16a34a); transition: width .4s cubic-bezier(.22,1,.36,1); }
+    .ov-plan-bar i.hot { background: linear-gradient(90deg, #f59e0b, #ef4444); }
+    /* Colorful per-kind device tiles (Top clients) */
+    .dev-tile { display: inline-flex; align-items: center; justify-content: center;
+      width: 26px; height: 26px; border-radius: 8px; flex: none; }
     /* Data Usage card: Firewalla-style bottom-aligned bars over dashed
        gridlines with max-scale labels on the right and x ticks below. */
     .du-bar { flex: 1 1 0; min-width: 4px; max-width: 32px; height: 100%; display: flex; align-items: flex-end; cursor: pointer; position: relative; z-index: 1; }
@@ -355,11 +367,6 @@
        chart. Hovering a slice thickens it and swaps the centre readout
        to that app (classic pie behaviour, in the house idiom). The
        three app donuts draw at 128px so the readout has hole room. */
-    .cl-apps-viz { display: flex; align-items: center; gap: var(--s5); flex-wrap: wrap; }
-    .cl-apps-viz .charts { flex: 1 1 280px; }
-    #cl-apps-donut, #ov-apps-donut, #clm-apps-donut { width: 128px; height: 128px; }
-    #cl-apps-donut circle, #ov-apps-donut circle, #clm-apps-donut circle { transition: stroke-width .25s cubic-bezier(.22,1,.36,1); cursor: default; }
-    #cl-apps-donut-val, #ov-apps-donut-val, #clm-apps-donut-val { font-size: 1.1rem; }
     /* Centre label: name over percentage; hard-capped at three lines so a
        long app name never walks over the ring. */
     .ov-donut-c .who { font-size: var(--t-2xs); color: var(--ink-2); max-width: 100px; line-height: 1.25;
@@ -860,6 +867,7 @@
       <div class="ov-grid ov-g3">
         <section class="sect ov-card">
           <div class="ov-card-cap"><span class="ov-cap-t">Usage by device</span><span class="ov-cap-sub" id="ov-usage-sub">This billing period</span></div>
+          <div id="ov-plan" class="hidden"></div>
           <div class="ov-usage">
             <div class="ov-donut-wrap">
               <svg id="ov-donut" width="112" height="112" viewBox="0 0 112 112" role="img" aria-label="Usage by device donut chart"></svg>
@@ -892,7 +900,14 @@
         </section>
 
         <section class="sect ov-card">
-          <div class="ov-card-cap"><span class="ov-cap-t">Top clients</span><span class="ov-cap-sub" id="ov-top-sub">This billing period</span></div>
+          <div class="ov-card-cap"><span class="ov-cap-t">Top clients</span><span class="ov-cap-sub" id="ov-top-sub">This billing period</span>
+            <span style="flex:1"></span>
+            <span style="display:inline-flex;gap:4px;align-self:center">
+              <button class="intrange-btn du-btn tc-btn on" data-tc="total" role="button" aria-pressed="true">All</button>
+              <button class="intrange-btn du-btn tc-btn" data-tc="down" role="button" aria-pressed="false" title="Rank by downloads">↓</button>
+              <button class="intrange-btn du-btn tc-btn" data-tc="up" role="button" aria-pressed="false" title="Rank by uploads">↑</button>
+            </span>
+          </div>
           <div id="ov-topclients" class="ov-top-rows"></div>
           <div id="ov-tapo" class="sm muted ov-foot" style="display:none"></div>
         </section>
@@ -910,20 +925,6 @@
           <div class="ov-card-cap"><span class="ov-cap-t">System health</span><span id="ov-sh-state" class="ov-cap-state" data-state="ok">All services operational</span></div>
           <div id="ov-syshealth" class="ov-sh-rows"></div>
         </section>
-
-        <!-- Traffic by application (netifyd DPI): overall composition
-             donut; hidden until /api/apps reports traffic -->
-        <section class="sect ov-card" id="ov-apps-card" style="display:none">
-          <div class="ov-card-cap"><span class="ov-cap-t">Traffic by application</span><span class="ov-cap-sub" id="ov-apps-sub"></span></div>
-          <div class="ov-usage">
-            <div class="ov-donut-wrap">
-              <svg id="ov-apps-donut" width="128" height="128" viewBox="0 0 112 112" role="img" aria-label="Traffic by application donut chart"></svg>
-              <div class="ov-donut-c"><b class="num" id="ov-apps-donut-val">–</b><span class="who" id="ov-apps-donut-lab">total</span></div>
-            </div>
-            <div id="ov-apps-legend" class="ov-usage-legend"></div>
-          </div>
-        </section>
-      </div>
 
       <!-- Line health: WAN latency over the chosen window -->
       <section class="sect" id="ov-lh-sect">
@@ -1138,35 +1139,6 @@
         </div>
       </section>
 
-      <!-- Per-application traffic (netifyd DPI): hidden until /api/apps
-           reports a non-empty aggregation -->
-      <section id="cl-apps" class="sect hidden">
-        <div class="sect-head">
-          <h2 class="h2">Applications <span class="sub" id="cl-apps-sub"></span></h2>
-        </div>
-        <div class="cl-apps-viz">
-          <div class="ov-donut-wrap">
-            <svg id="cl-apps-donut" width="128" height="128" viewBox="0 0 112 112" role="img" aria-label="Traffic share by application donut chart"></svg>
-            <div class="ov-donut-c"><b class="num" id="cl-apps-donut-val">–</b><span class="who" id="cl-apps-donut-lab">total</span></div>
-          </div>
-          <div id="cl-apps-chart" class="charts"></div>
-        </div>
-        <div class="overflow-x-auto">
-          <table class="tbl fixed" style="min-width:780px">
-            <colgroup>
-              <col /><col style="width:110px" /><col style="width:110px" /><col style="width:170px" /><col />
-            </colgroup>
-            <thead>
-              <tr><th>Application</th><th class="r">↓ total</th><th class="r">↑ total</th>
-                <th class="r">share</th><th>Devices</th></tr>
-            </thead>
-            <tbody id="cl-apps-tbody">
-              <tr><td colspan="5" class="empty">Loading applications…</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
       <!-- Top-talker history -->
       <section class="sect">
         <div class="sect-head">
@@ -1339,9 +1311,6 @@
         <!-- Today's top internet destinations for this device (eBPF
              per-destination byte counters); hidden until data exists -->
         <div id="clm-dests" class="hidden" style="padding:0 var(--s5) var(--s5)"></div>
-        <!-- Per-application traffic for this device (netifyd DPI); hidden
-             while netifyd is absent or has seen nothing from this MAC -->
-        <div id="clm-apps" class="hidden" style="padding:0 var(--s5) var(--s5)"></div>
       </div>
     </div>
   </div>
@@ -2373,9 +2342,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         loadOvIncidents();
         loadRadio();
         loadLineHealth();
-        loadApps(); // overall app donut (renderApps has its own 10s cache)
         if (!tabTimers.overview) tabTimers.overview = [setInterval(pollOverview, 10000), setInterval(loadOvIncidents, 60000),
-          setInterval(loadRadio, 30000), setInterval(loadApps, 10000)];
+          setInterval(loadRadio, 30000)];
       } else if (name === 'trends') {
         loadTrendsPanels();
         if (!tabTimers.trends) tabTimers.trends = [setInterval(loadTrendsPanels, 300000)];
@@ -2688,7 +2656,6 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
 
     async function pollClients() {
       if (Date.now() - orbiAt > 60000) loadOrbi();
-      loadApps();
       try {
         const r = await fetch(appURL('/api/clients'));
         if (!r.ok) return;
@@ -2696,260 +2663,6 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         renderClientsTable();
         renderClientKPIs();
       } catch (e) { /* transient */ }
-    }
-
-    // ── Applications (netifyd DPI, /api/apps) ─────────────────────────────
-    // Per-application byte totals for the whole aggregation window (since
-    // netifyd started). One shared fetch feeds both the Clients-tab table
-    // and the per-device list in the client modal. Endpoint absent (503) →
-    // both stay hidden.
-    let appsCache = null, appsAt = 0;   // null = endpoint unavailable or not yet fetched
-    const normMac = s => String(s || '').toLowerCase();
-
-    // Brand colours for well-known apps (matched against the netify tag),
-    // then a deterministic palette so every other app still gets a stable
-    // hue — the Ubiquiti-style colourful application list.
-    const APP_BRANDS = [
-      ['netflix', '#e50914'], ['youtube', '#ff0000'], ['googlevideo', '#ff0000'],
-      ['whatsapp', '#25d366'], ['instagram', '#e1306c'], ['facebook', '#1877f2'],
-      ['messenger', '#0084ff'], ['microsoft', '#00a4ef'], ['onedrive', '#0364b8'],
-      ['teams', '#6264a7'], ['github', '#a371f7'], ['gitlab', '#fc6d26'],
-      ['google', '#4285f4'], ['gmail', '#ea4335'], ['amazon', '#ff9900'],
-      ['cloudflare', '#f48120'], ['akamai', '#0096ca'], ['apple', '#a2aaad'],
-      ['icloud', '#3693f3'], ['ubuntu', '#e95420'], ['telegram', '#26a5e4'],
-      ['twitter', '#1da1f2'], ['reddit', '#ff4500'], ['steam', '#66c0f4'],
-      ['twitch', '#9146ff'], ['spotify', '#1db954'], ['discord', '#5865f2'],
-      ['signal', '#3a76f0'], ['tiktok', '#fe2c55'],
-      ['tunnel', '#f48120'], ['argotunnel', '#f48120'], ['wireguard', '#88171a'],
-      ['ntp', '#f59e0b'], ['dns', '#38bdf8'],
-    ];
-    const APP_PALETTE = ['#0ea5e9', '#8b5cf6', '#f97316', '#10b981', '#ef4444',
-      '#eab308', '#ec4899', '#14b8a6', '#6366f1', '#84cc16', '#f43f5e', '#06b6d4'];
-    function appColor(tag) {
-      const t = String(tag || '').toLowerCase();
-      if (!t || t === 'unknown') return '#959084';
-      for (const [key, col] of APP_BRANDS) if (t.includes(key)) return col;
-      let hash = 0;
-      for (let i = 0; i < t.length; i++) hash = (hash * 31 + t.charCodeAt(i)) >>> 0;
-      return APP_PALETTE[hash % APP_PALETTE.length];
-    }
-
-    /** Per-application traffic chart: the 2h trend of each of the top
-     *  apps, in the dashboard's own tape-chart language, coloured to
-     *  match the table's dots (makeChart renders the legend). */
-    let appsPlots = [];
-    function hexA(hex, a) {
-      const m = /^#([0-9a-f]{6})$/i.exec(hex);
-      if (!m) return hex;
-      const n = parseInt(m[1], 16);
-      return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
-    }
-    function renderAppsChart(apps) {
-      const cd = document.getElementById('cl-apps-chart');
-      if (!cd) return;
-      appsPlots.forEach(p => { try { p.destroy(); } catch (_) {} });
-      appsPlots = [];
-      cd.innerHTML = '';
-      const top = apps.filter(a => a.trend && a.trend.down && a.trend.down.length).slice(0, 6);
-      if (!top.length) return;
-      const t0 = top[0].trend, n = t0.down.length, bsec = t0.bucket_sec || 60;
-      // Buckets are absolute minute indices; the newest is the last slot.
-      const end = Math.floor(Date.now() / 1000 / bsec);
-      const times = Array.from({ length: n }, (_, i) => (end - n + 1 + i) * bsec);
-      const W = Math.max(200, cd.clientWidth - 4), H = 170;
-      appsPlots.push(makeChart(cd, W, H, times, top.map(a => {
-        const col = appColor(a.tag);
-        return {
-          label: a.name,
-          data: a.trend.down.map((v, i) => v + ((a.trend.up || [])[i] || 0)),
-          stroke: col,
-          fill: hexA(col, 0.12),
-        };
-      }), 'Traffic by application (2h)', v => fmtBytes(v) + '/min', 'cl-x'));
-    }
-
-    /** Composition donut engine: top 5 apps + "Other" as stroked arcs in
-     *  the same idiom as the Overview usage donut. Hovering a slice
-     *  thickens it and swaps the centre readout to that app (ECharts-pie
-     *  behaviour, house colours). ids: {svg, val, lab} element ids;
-     *  apps: [{name, tag, total}]. */
-    const OTHER_COLOR = '#5c574e';
-    function drawAppsDonut(ids, apps) {
-      const svg = document.getElementById(ids.svg);
-      const val = document.getElementById(ids.val);
-      const lab = document.getElementById(ids.lab);
-      if (!svg || !val || !lab) return;
-      const rows = apps.filter(a => (a.total || 0) > 0)
-        .sort((a, b) => (b.total || 0) - (a.total || 0));
-      const grand = rows.reduce((a, x) => a + (x.total || 0), 0);
-      val.textContent = grand ? fmtBytes(grand) : '–';
-      lab.textContent = 'total';
-      if (!grand) { svg.innerHTML = ''; return; }
-      // Top 5 slices, the rest folded into "Other".
-      const top = rows.slice(0, 5);
-      const rest = rows.slice(5).reduce((a, x) => a + (x.total || 0), 0);
-      const slices = rest > 0 ? top.concat([{ name: 'Other', tag: '', total: rest, other: true }]) : top;
-      const C = 2 * Math.PI * 44;
-      let off = 0;
-      svg.innerHTML = slices.map(s => {
-        const frac = s.total / grand;
-        const len = Math.max(0, frac * C - 2); // 2px gap between slices
-        const col = s.other ? OTHER_COLOR : appColor(s.tag);
-        return '<circle cx="56" cy="56" r="44" fill="none" stroke="' + col +
-          '" stroke-width="18" stroke-dasharray="' + len.toFixed(1) + ' ' + (C - len).toFixed(1) +
-          '" stroke-dashoffset="' + (-off).toFixed(1) + '" transform="rotate(-90 56 56)" stroke-linecap="butt"' +
-          ' data-nm="' + h(s.name) + '" data-bytes="' + fmtBytes(s.total) + '" data-pc="' + (frac * 100).toFixed(1) + '">' +
-          '<title>' + h(s.name) + ' · ' + (frac * 100).toFixed(1) + '% · ' + fmtBytes(s.total) + '</title></circle>';
-        off += frac * C;   // advance so the next slice starts here
-      }).join('');
-      // Centre readout follows the hovered slice, ECharts-style.
-      svg.onmouseover = e => {
-        const c = e.target.closest('circle[data-nm]');
-        if (!c) return;
-        val.textContent = c.dataset.bytes;
-        lab.innerHTML = h(c.dataset.nm) + '<br>' + h(c.dataset.pc) + '%';
-        c.setAttribute('stroke-width', '24');
-      };
-      svg.onmouseout = e => {
-        const c = e.target.closest('circle[data-nm]');
-        if (!c) return;
-        val.textContent = fmtBytes(grand);
-        lab.textContent = 'total';
-        c.setAttribute('stroke-width', '18');
-      };
-    }
-    // Top-5+Other slice list shared by the donut and its Overview legend.
-    function appSlices(apps) {
-      const rows = apps.filter(a => (a.total || 0) > 0)
-        .sort((a, b) => (b.total || 0) - (a.total || 0));
-      const top = rows.slice(0, 5);
-      const rest = rows.slice(5).reduce((a, x) => a + (x.total || 0), 0);
-      return rest > 0 ? top.concat([{ name: 'Other', tag: '', total: rest, other: true }]) : top;
-    }
-    /** Overview card: the same composition donut, overall — donut plus a
-     *  dot legend (the Clients tab's table is its own legend; Overview
-     *  has none). Hidden until netifyd reports traffic. */
-    function renderOverviewApps() {
-      const card = document.getElementById('ov-apps-card');
-      const legend = document.getElementById('ov-apps-legend');
-      if (!card || !legend) return;
-      const apps = appsCache && appsCache.apps || [];
-      if (!apps.length) { card.style.display = 'none'; return; }
-      card.style.display = '';
-      document.getElementById('ov-apps-sub').textContent =
-        'since ' + new Date(appsCache.started).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      drawAppsDonut({ svg: 'ov-apps-donut', val: 'ov-apps-donut-val', lab: 'ov-apps-donut-lab' }, apps);
-      const grand = apps.reduce((a, x) => a + (x.total || 0), 0) || 1;
-      legend.innerHTML = appSlices(apps).map(s =>
-        '<div class="ov-usage-row">' +
-          '<span class="ov-usage-dot" style="background:' + (s.other ? OTHER_COLOR : appColor(s.tag)) + '"></span>' +
-          '<span class="nm">' + h(s.name) + '</span>' +
-          '<span class="gb">' + fmtBytes(s.total) + '</span>' +
-          '<span class="pc">' + (s.total / grand * 100).toFixed(0) + '%</span>' +
-        '</div>').join('');
-    }
-
-    async function fetchApps() {
-      try {
-        const r = await fetch(appURL('/api/apps'));
-        if (!r.ok) { appsCache = null; return; }
-        appsCache = await r.json();
-        appsAt = Date.now();
-      } catch (e) { /* transient */ }
-    }
-
-    async function loadApps(force) {
-      const tabActive = document.querySelector('.tab-btn[data-tab="clients"].tab-active') ||
-        document.querySelector('.tab-btn[data-tab="overview"].tab-active');
-      const modalOpen = clModal.mac;
-      if (!tabActive && !modalOpen) return;
-      if (!force && appsCache && Date.now() - appsAt < 10000) { renderApps(); return; }
-      await fetchApps();
-      renderApps();
-    }
-
-    function renderApps() {
-      // Table first: it unhides the section, so the trend chart below
-      // measures its real container width instead of the hidden fallback.
-      renderAppsTable();
-      drawAppsDonut({ svg: 'cl-apps-donut', val: 'cl-apps-donut-val', lab: 'cl-apps-donut-lab' },
-        appsCache && appsCache.apps || []);
-      renderAppsChart(appsCache && appsCache.apps || []);
-      renderOverviewApps();
-      if (clModal.mac) renderClientApps();
-    }
-
-    /** Clients-tab table: top applications with ↓/↑ totals, share of the
-     *  window's traffic and the devices behind each app. */
-    function renderAppsTable() {
-      const sect = document.getElementById('cl-apps');
-      const body = document.getElementById('cl-apps-tbody');
-      if (!sect || !body) return;
-      const apps = appsCache && appsCache.apps || [];
-      if (!appsCache || !apps.length) { sect.classList.add('hidden'); return; }
-      const grand = apps.reduce((a, x) => a + (x.total || 0), 0) || 1;
-      document.getElementById('cl-apps-sub').textContent =
-        'per-device traffic since ' + new Date(appsCache.started).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
-        ' · ' + appsCache.flows + ' flows live';
-      body.innerHTML = apps.slice(0, 12).map(a => {
-        const col = appColor(a.tag);
-        const more = (a.device || []).length > 3
-          ? '<span class="xs muted">+' + (a.device.length - 3) + ' more</span>' : '';
-        // Flex-wrap: each device + bytes pair is atomic (no orphaned "MB",
-        // no mid-pair clips) but pairs still flow onto the next line.
-        const devs = '<div style="display:flex;flex-wrap:wrap;gap:2px 12px;align-items:baseline">' +
-          (a.device || []).slice(0, 3).map(d =>
-            '<span style="white-space:nowrap">' + h(d.name || d.mac) + ' <span class="num muted xs">' + fmtBytes(d.total || 0) + '</span></span>'
-          ).join('') + more + '</div>';
-        const share = Math.max(2, (a.total || 0) / grand * 100).toFixed(1);
-        return '<tr>' +
-          '<td><span class="app-dot" style="background:' + col + '"></span>' +
-            '<span class="strong">' + h(a.name) + '</span>' +
-            (a.host ? '<div class="xs muted truncate" style="max-width:260px">' + h(a.host) + '</div>' : '') + '</td>' +
-          '<td class="r num dl">' + fmtBytes(a.down || 0) + '</td>' +
-          '<td class="r num">' + fmtBytes(a.up || 0) + '</td>' +
-          '<td class="r"><div class="bar" style="margin:0"><i style="width:' + share + '%;background:' + col + '"></i></div></td>' +
-          '<td class="sm">' + (devs || '<span class="muted">–</span>') + '</td>' +
-        '</tr>';
-      }).join('');
-      sect.classList.remove('hidden');
-    }
-
-    /** Client-modal section: this device's applications, biggest first. */
-    function renderClientApps() {
-      const el = document.getElementById('clm-apps');
-      if (!el || !clModal.mac) return;
-      const mac = normMac(clModal.mac);
-      const mine = ((appsCache && appsCache.apps) || [])
-        .map(a => ({ a, d: (a.device || []).find(d => normMac(d.mac) === mac) }))
-        .filter(x => x.d)
-        .sort((x, y) => (y.d.total || 0) - (x.d.total || 0));
-      if (!mine.length) { el.classList.add('hidden'); el.innerHTML = ''; return; }
-      const head = '<div class="sect-head" style="border-top:1px solid var(--groove);padding-top:var(--s4)">' +
-        '<h3 class="h3">Applications <span class="normal muted sm">since netifyd start</span></h3></div>';
-      const max = Math.max(...mine.map(x => Math.max(x.d.down || 0, x.d.up || 0)), 1e-9);
-      const bar = (v, col) => '<div class="bar" style="margin:0"><i style="width:' +
-        (v > 0 ? Math.max(2, v / max * 100).toFixed(1) : 0) + '%;background:' + col + '"></i></div>';
-      // Composition donut for this device beside its per-app dl/ul bars;
-      // the bar list doubles as the donut's legend (matching dots).
-      const myApps = mine.map(({ a, d }) => ({ name: a.name, tag: a.tag, total: d.total || 0 }));
-      el.innerHTML = head +
-        '<div style="display:flex;gap:var(--s5);align-items:center;flex-wrap:wrap">' +
-          '<div class="ov-donut-wrap" style="flex:none">' +
-            '<svg id="clm-apps-donut" width="128" height="128" viewBox="0 0 112 112" role="img" aria-label="Traffic by application donut for this device"></svg>' +
-            '<div class="ov-donut-c"><b class="num" id="clm-apps-donut-val">–</b><span class="who" id="clm-apps-donut-lab">total</span></div>' +
-          '</div>' +
-          '<div class="stack" style="flex:1 1 240px;min-width:0">' + mine.map(({ a, d }) =>
-            '<div class="ubar">' +
-              '<span style="grid-row:span 2" class="strong truncate"><span class="app-dot" style="background:' +
-                appColor(a.tag) + '"></span>' + h(a.name) + '</span>' +
-              bar(d.down || 0, 'var(--dl)') + '<span class="num right">' + fmtBytes(d.down || 0) + '</span>' +
-              bar(d.up || 0, 'var(--ul)') + '<span class="num right muted">' + fmtBytes(d.up || 0) + '</span>' +
-            '</div>').join('') + '</div>' +
-        '</div>' +
-        '<div class="xs muted mt2"><span class="swatch dl"></span> downloaded<span class="sep">·</span><span class="swatch ul"></span> uploaded</div>';
-      drawAppsDonut({ svg: 'clm-apps-donut', val: 'clm-apps-donut-val', lab: 'clm-apps-donut-lab' }, myApps);
-      el.classList.remove('hidden');
     }
 
     // Persisted MAC -> friendly-name history (/api/names). Lets every
@@ -3650,12 +3363,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (us) { us.classList.add('hidden'); us.innerHTML = ''; }
       const de = document.getElementById('clm-dests');
       if (de) { de.classList.add('hidden'); de.innerHTML = ''; }
-      const ca = document.getElementById('clm-apps');
-      if (ca) { ca.classList.add('hidden'); ca.innerHTML = ''; }
       requestAnimationFrame(loadClientModalHistory);
       loadClientUsage();
       loadClientDests();
-      loadApps(true);
       if (clModal.timer) clearInterval(clModal.timer);
       clModal.timer = setInterval(loadClientModalHistory, 60000);
     }
@@ -3672,8 +3382,6 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (us) { us.classList.add('hidden'); us.innerHTML = ''; }
       const de = document.getElementById('clm-dests');
       if (de) { de.classList.add('hidden'); de.innerHTML = ''; }
-      const ca = document.getElementById('clm-apps');
-      if (ca) { ca.classList.add('hidden'); ca.innerHTML = ''; }
     }
 
     // Per-day usage (/api/usage?days=7) shared by every client modal; cached
@@ -4847,16 +4555,31 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     /** Per-client usage totals in GB for the selected window:
      *  { MAC: gb } — from /api/usage/window, or the billing cache. */
     function usageTotals() {
+      const dirs = usageTotalsDirs();
+      if (!dirs) return null;
+      const t = {};
+      Object.keys(dirs.down).forEach(mac => { t[mac] = (dirs.down[mac] || 0) + (dirs.up[mac] || 0); });
+      Object.keys(dirs.up).forEach(mac => { if (t[mac] === undefined) t[mac] = dirs.up[mac] || 0; });
+      return t;
+    }
+
+    /** Per-client usage split by direction for the selected window:
+     *  { down: {MAC: gb}, up: {MAC: gb} } — from /api/usage/window, or
+     *  the billing cache. Null until the backing payload has loaded. */
+    function usageTotalsDirs() {
       if (winActive()) {
         if (!winUsage) return null;
-        const t = {};
+        const down = {}, up = {};
         Object.keys(winUsage.clients || {}).forEach(mac => {
           const c = winUsage.clients[mac];
-          t[mac.toUpperCase()] = (c.rx_gb || 0) + (c.tx_gb || 0);
+          down[mac.toUpperCase()] = c.rx_gb || 0;
+          up[mac.toUpperCase()] = c.tx_gb || 0;
         });
-        return t;
+        return { down, up };
       }
-      return ovUsageCache ? usagePeriodTotals(ovUsageCache) : null;
+      if (!ovUsageCache) return null;
+      const p = usagePeriodDirs(ovUsageCache);
+      return { down: p.down, up: p.up };
     }
 
     /** Fetch per-client totals for the window, then repaint the donut,
@@ -4944,10 +4667,41 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
      *  last Orbi snapshot — a powered-off satellite renders dimmed and
      *  its stub dashed. Nodes drill into their tabs via data-tab-jump;
      *  rates refresh from SSE separately. */
-    const ICON_GLOBE = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
     const ICON_CLIENTS = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
-    const ICON_WIFI = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.859a10 10 0 0 1 14 0"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/></svg>';
-    const ICON_SAT = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 7 9 3 5 7l4 4"/><path d="m17 11 4 4-4 4-4-4"/><path d="m8 12 4 4 4-4-4-4Z"/><path d="M16 8c3-3 4-7 4-7s-4 1-7 4"/><path d="M17 11 13 7"/></svg>';
+
+    /** Realistic mini device illustrations for the topology chain —
+     *  filled, colored slabs with LEDs (like the hardware on the shelf)
+     *  instead of thin line glyphs. Dark-slate bodies read on every chip
+     *  tint; LEDs stay lit even when a node renders dimmed offline. */
+    const BOX_BODY = '#3f4753', BOX_TOP = '#4e5868', BOX_EDGE = '#2b313c', LED_G = '#4ade80', LED_A = '#fbbf24';
+    const boxSVG = inner => '<svg width="26" height="26" viewBox="0 0 24 24" fill="none">' + inner + '</svg>';
+    const ICON_ONT = boxSVG(
+      '<path d="M3.2 10 4.1 8.3c.3-.5.8-.8 1.4-.8h13c.6 0 1.1.3 1.4.8l.9 1.7" fill="' + BOX_EDGE + '"/>' +
+      '<rect x="2.6" y="10" width="18.8" height="7.4" rx="1.4" fill="' + BOX_BODY + '"/>' +
+      '<rect x="2.6" y="10" width="18.8" height="1.8" rx=".9" fill="' + BOX_TOP + '"/>' +
+      '<circle cx="6" cy="14.8" r=".85" fill="' + LED_G + '"/><circle cx="9" cy="14.8" r=".85" fill="' + LED_G + '"/>' +
+      '<circle cx="12" cy="14.8" r=".85" fill="' + LED_G + '"/><circle cx="15" cy="14.8" r=".85" fill="' + LED_A + '"/>' +
+      '<path d="M20.5 11.5l2 .9" stroke="#60a5fa" stroke-width="1.2" stroke-linecap="round"/>');
+    const ICON_NANOPI = boxSVG(
+      '<path d="M18.9 10.4V4.8" stroke="' + BOX_EDGE + '" stroke-width="1.6" stroke-linecap="round"/>' +
+      '<circle cx="18.9" cy="4" r="1.1" fill="' + BOX_EDGE + '"/>' +
+      '<rect x="2.6" y="10.4" width="18.8" height="7.2" rx="1.4" fill="' + BOX_BODY + '"/>' +
+      '<rect x="2.6" y="10.4" width="18.8" height="1.7" rx=".85" fill="' + BOX_TOP + '"/>' +
+      '<circle cx="6" cy="15" r=".85" fill="' + LED_G + '"/><circle cx="9" cy="15" r=".85" fill="' + LED_G + '"/>' +
+      '<circle cx="12" cy="15" r=".85" fill="' + LED_G + '"/>');
+    const ICON_APBOX = boxSVG(
+      '<path d="M8.3 6.4a6.6 6.6 0 0 1 7.4 0" stroke="#2dd4bf" stroke-width="1.7" stroke-linecap="round"/>' +
+      '<path d="M10 9a4 4 0 0 1 4 0" stroke="#2dd4bf" stroke-width="1.7" stroke-linecap="round"/>' +
+      '<rect x="5.6" y="10.8" width="12.8" height="7.6" rx="1.6" fill="' + BOX_BODY + '"/>' +
+      '<rect x="5.6" y="10.8" width="12.8" height="1.7" rx=".85" fill="' + BOX_TOP + '"/>' +
+      '<circle cx="8.8" cy="15.4" r=".8" fill="' + LED_G + '"/><circle cx="12" cy="15.4" r=".8" fill="' + LED_G + '"/>' +
+      '<circle cx="15.2" cy="15.4" r=".8" fill="' + LED_A + '"/>');
+    const ICON_SATBOX = boxSVG(
+      '<path d="M8.7 6.9a5.6 5.6 0 0 1 6.6 0" stroke="' + LED_A + '" stroke-width="1.7" stroke-linecap="round"/>' +
+      '<path d="M10.3 9.4a3 3 0 0 1 3.4 0" stroke="' + LED_A + '" stroke-width="1.7" stroke-linecap="round"/>' +
+      '<rect x="7" y="10.9" width="10" height="7.4" rx="3" fill="' + BOX_BODY + '"/>' +
+      '<rect x="7" y="10.9" width="10" height="1.6" rx=".8" fill="' + BOX_TOP + '"/>' +
+      '<circle cx="10.3" cy="15.4" r=".75" fill="' + LED_G + '"/><circle cx="13.7" cy="15.4" r=".75" fill="' + LED_A + '"/>');
 
     function topoNode(gotoTab, icon, name, sub, cls, kind) {
       return '<button class="topo-node' + (cls ? ' ' + cls : '') + '" data-tab-jump="' + gotoTab + '">' +
@@ -5004,17 +4758,17 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         const off = s.online === false;
         const n = (perAp[k] || []).length;
         return '<span class="topo-sat-stub' + (off ? ' offline' : '') + '"></span>' +
-          topoNode('clients', ICON_SAT, h(s.model || s.name || s.mac),
+          topoNode('clients', ICON_SATBOX, h(s.model || s.name || s.mac),
             off ? 'offline' : 'Satellite · ' + n + ' client' + (n === 1 ? '' : 's'),
             off ? 'offline' : '', 'sat');
       }).join('');
 
       nav.innerHTML =
-        topoNode('diag', ICON_GLOBE, 'Internet', 'Fiber · PPPoE', '', 'globe') +
+        topoNode('diag', ICON_ONT, 'Internet', 'Fiber · PPPoE', '', 'globe') +
         topoLink('topo-wan-rate', '–') +
-        topoNode('system', ICON_ROUTER, 'NanoPi R6C', 'Router · CAKE', '', 'router') +
+        topoNode('system', ICON_NANOPI, 'NanoPi R6C', 'Router · CAKE', '', 'router') +
         topoLink('topo-lan-rate', apReachable ? '–' : 'offline', !apReachable) +
-        topoNode('clients', ICON_WIFI, apModel, apSub, apReachable ? '' : 'offline', 'ap') +
+        topoNode('clients', ICON_APBOX, apModel, apSub, apReachable ? '' : 'offline', 'ap') +
         satChain +
         topoLink('topo-wifi-rate', '–') +
         topoNode('clients', ICON_CLIENTS, onlineN + ' Clients', 'online now', '', 'clients');
@@ -5399,16 +5153,48 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
      *  client-modal cache, which always fetches a 7-day window. */
     let ovUsageCache = null;
     let ovUsageAt = 0;
-    function usagePeriodTotals(u) {
-      const ym = new Date().toISOString().slice(0, 7); // current billing month
-      const totals = {};
+
+    /** Bounds of the current billing period. The reset day comes from
+     *  -plan-reset-day (surfaced by /api/usage); the start is the most
+     *  recent reset-day anniversary on or before today. Months shorter
+     *  than the reset day clamp to their last day (day 31 → Feb 28). */
+    function billingPeriod(resetDay) {
+      const rd = Math.min(Math.max(1, resetDay || 1), 31);
+      const now = new Date();
+      const mk = (y, m) => new Date(y, m, Math.min(rd, new Date(y, m + 1, 0).getDate()));
+      let start = mk(now.getFullYear(), now.getMonth());
+      if (start > now) start = mk(now.getFullYear(), now.getMonth() - 1);
+      const next = mk(start.getFullYear(), start.getMonth() + 1);
+      const daysInPeriod = Math.max(1, Math.round((next - start) / 86400000));
+      const daysElapsed = Math.min(daysInPeriod, Math.floor((now - start) / 86400000) + 1);
+      const pad = n => String(n).padStart(2, '0');
+      return { startStr: start.getFullYear() + '-' + pad(start.getMonth() + 1) + '-' + pad(start.getDate()),
+               daysElapsed, daysInPeriod, resetDay: rd };
+    }
+
+    /** Per-MAC billing-period usage split by direction, plus the period
+     *  bounds: { down: {MAC: gb}, up: {MAC: gb}, period: {...} }. */
+    function usagePeriodDirs(u) {
+      const plan = u && u.plan;
+      const period = billingPeriod(plan && plan.reset_day);
+      const out = { down: {}, up: {}, period };
       (u && u.days || []).forEach(d => {
-        if (!d.date || !d.date.startsWith(ym)) return;
+        if (!d.date || d.date < period.startStr) return;
         Object.keys(d.clients || {}).forEach(mac => {
           const c = d.clients[mac];
-          totals[mac] = (totals[mac] || 0) + (c.rx_gb || 0) + (c.tx_gb || 0);
+          out.down[mac] = (out.down[mac] || 0) + (c.rx_gb || 0);
+          out.up[mac] = (out.up[mac] || 0) + (c.tx_gb || 0);
         });
       });
+      return out;
+    }
+
+    function usagePeriodTotals(u) {
+      if (!u) return null;
+      const dirs = usagePeriodDirs(u);
+      const totals = {};
+      Object.keys(dirs.down).forEach(mac => { totals[mac] = (dirs.down[mac] || 0) + (dirs.up[mac] || 0); });
+      Object.keys(dirs.up).forEach(mac => { if (totals[mac] === undefined) totals[mac] = dirs.up[mac] || 0; });
       return totals;
     }
 
@@ -5526,14 +5312,39 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + DEV_SVGS[devKind(c && c.name)] + '</svg>';
     }
 
+    /** Per-kind tints for the colorful Top clients tiles. */
+    const DEV_TINTS = {
+      phone:   { bg: 'rgba(0, 105, 255, .13)', fg: '#3b82f6' },
+      tablet:  { bg: 'rgba(124, 58, 237, .13)', fg: '#8b5cf6' },
+      tv:      { bg: 'rgba(239, 68, 68, .13)', fg: '#ef4444' },
+      console: { bg: 'rgba(22, 163, 74, .13)', fg: '#22c55e' },
+      iot:     { bg: 'rgba(13, 148, 136, .13)', fg: '#14b8a6' },
+      pc:      { bg: 'rgba(245, 158, 11, .14)', fg: '#d97706' },
+      generic: { bg: 'rgba(100, 116, 139, .13)', fg: '#94a3b8' },
+    };
+    /** Device icon on a tinted rounded tile, per device kind. */
+    function devIconTint(c, size) {
+      const k = devKind(c && c.name);
+      const t = DEV_TINTS[k] || DEV_TINTS.generic;
+      return '<span class="dev-tile" style="background:' + t.bg + ';color:' + t.fg + '">' +
+        '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + DEV_SVGS[k] + '</svg></span>';
+    }
+
+    let tcDir = 'total'; // Top clients ranking: 'total' | 'down' | 'up'
     function renderTopClients(list) {
       const el = document.getElementById('ov-topclients');
       if (!el) return;
-      // Rank by the selected window's usage when known, else by lifetime totals.
-      const totals = usageTotals();
+      // Rank by the selected window's usage (split by direction) when
+      // known, else by lifetime totals.
+      const dirs = usageTotalsDirs();
       const online = (list || []).filter(c => c.online);
-      const gbOf = c => totals ? (totals[(c.mac || '').toUpperCase()] || 0) : (c.rx_total + c.tx_total) / 1024 ** 3;
-      const top = online.slice().sort((a, b) => gbOf(b) - gbOf(a)).slice(0, 5);
+      const pairOf = c => {
+        const mac = (c.mac || '').toUpperCase();
+        if (dirs) return [dirs.down[mac] || 0, dirs.up[mac] || 0];
+        return [(c.rx_total || 0) / 1024 ** 3, (c.tx_total || 0) / 1024 ** 3];
+      };
+      const valOf = p => tcDir === 'down' ? p[0] : tcDir === 'up' ? p[1] : p[0] + p[1];
+      const top = online.slice().sort((a, b) => valOf(pairOf(b)) - valOf(pairOf(a))).slice(0, 5);
       // A rotated randomized MAC makes one logical device appear twice
       // (same DHCP hostname, two MACs). Merge duplicates by resolved name
       // so the card shows the device once with summed usage.
@@ -5542,16 +5353,17 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       for (const c of top) {
         const nm = c.name || knownName(c.mac) || c.ip || c.mac;
         const k = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(nm) ? 'mac:' + nm : 'name:' + nm.toLowerCase();
+        const p = pairOf(c);
         if (seen[k]) {
-          seen[k].gbSum += gbOf(c);
+          seen[k].dSum += p[0]; seen[k].uSum += p[1]; seen[k].gbSum += valOf(p);
           seen[k].extra++;
         } else {
-          seen[k] = { c, name: nm, gbSum: gbOf(c), extra: 0 };
+          seen[k] = { c, name: nm, dSum: p[0], uSum: p[1], gbSum: valOf(p), extra: 0 };
           mergedTop.push(seen[k]);
         }
       }
       const max = Math.max(...mergedTop.map(m => m.gbSum), 0.001);
-      if (winActive() && winUsage && top.every(c => gbOf(c) === 0)) {
+      if (winActive() && winUsage && top.every(c => valOf(pairOf(c)) === 0)) {
         let emptyMsg = 'No traffic in this window.';
         const wan = (winUsage.wanRx || 0) + (winUsage.wanTx || 0);
         if (wan >= 0.001) emptyMsg = 'No per-device traffic. WAN moved ' + (wan >= 1 ? wan.toFixed(1) + ' GB' : (wan * 1024).toFixed(0) + ' MB') + ' (router/WARP background).';
@@ -5562,10 +5374,12 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         const gb = m.gbSum;
         const c = m.c;
         const name = m.name;
-        const icon = devIcon(c, 16);
+        const icon = devIconTint(c, 15);
+        const both = '↓ ' + (m.dSum >= 1 ? m.dSum.toFixed(1) + ' GB' : (m.dSum * 1024).toFixed(0) + ' MB') +
+                     ' · ↑ ' + (m.uSum >= 1 ? m.uSum.toFixed(1) + ' GB' : (m.uSum * 1024).toFixed(0) + ' MB');
         return '<button class="ov-top-row tr-client" tabindex="0" data-mac="' + h(c.mac) + '"' +
                ' data-name="' + h(name) + '" data-ip="' + h(c.ip) + '" data-vendor="' + h(c.vendor || '') + '"' +
-               ' title="Open full connection history">' +
+               ' title="' + both + ' — open full connection history">' +
           icon +
           '<span class="nm">' + h(name) +
           (m.extra > 0 ? ' <span class="num xs muted">+' + m.extra + ' MACs</span>' : '') + '</span>' +
@@ -5722,6 +5536,38 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       renderUsageBars();
     };
 
+    // Top clients ranking: All / ↓ / ↑ (shares the du-btn styling but is
+    // excluded from the dashboard-window handler, like the grain pills).
+    document.querySelectorAll('.tc-btn').forEach(b => b.addEventListener('click', () => {
+      tcDir = b.dataset.tc;
+      _setPillBtns('.tc-btn', 'tc', tcDir);
+      renderTopClients(ovClients);
+    }));
+
+    /** Monthly data plan bar (Orbi app style): used this billing period,
+     *  the cap, and the end-of-period projection at today's pace. Hidden
+     *  when no plan is configured (-plan-gb 0). */
+    function renderPlanBar() {
+      const el = document.getElementById('ov-plan');
+      if (!el) return;
+      const plan = ovUsageCache && ovUsageCache.plan;
+      if (!plan || !(plan.cap_gb > 0)) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+      const dirs = usagePeriodDirs(ovUsageCache);
+      const used = Object.keys(dirs.down).reduce((a, mac) => a + (dirs.down[mac] || 0) + (dirs.up[mac] || 0), 0);
+      const { daysElapsed, daysInPeriod, resetDay } = dirs.period;
+      const fmt = g => g >= 1 ? (g >= 10 ? g.toFixed(0) : g.toFixed(1)) + ' GB' : (g * 1024).toFixed(0) + ' MB';
+      const pct = Math.min(100, used / plan.cap_gb * 100);
+      const pace = used / daysElapsed * daysInPeriod;
+      const over = pace > plan.cap_gb;
+      el.innerHTML =
+        '<div class="ov-plan-head">' +
+          '<span><b>' + fmt(used) + '</b> of ' + plan.cap_gb + ' GB plan</span>' +
+          '<span>resets on day ' + resetDay + ' · projected <span class="num"' + (over ? ' style="color:#ef4444"' : '') + '>' + fmt(pace) + '</span></span>' +
+        '</div>' +
+        '<div class="ov-plan-bar"><i class="' + (over ? 'hot' : '') + '" style="width:' + pct.toFixed(1) + '%"></i></div>';
+      el.classList.remove('hidden');
+    }
+
     async function pollOverview() {
       try {
         const jobs = [
@@ -5732,7 +5578,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           jobs.push(fetch(appURL('/api/history/system?range=24h')).then(r => r.json()).then(d => { ovWanData = d; ovWanAt = Date.now(); }));
         }
         if (!ovUsageCache || Date.now() - ovUsageAt > 300000) {
-          jobs.push(fetch(appURL('/api/usage')).then(r => r.json()).then(d => { ovUsageCache = d; ovUsageAt = Date.now(); }));
+          jobs.push(fetch(appURL('/api/usage?days=40')).then(r => r.json()).then(d => { ovUsageCache = d; ovUsageAt = Date.now(); }));
           jobs.push(loadUsageBars());
         }
         const [cl, evs] = await Promise.all(jobs);
@@ -5747,6 +5593,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           if (!cached || Date.now() - cached.at > 60000) loadWinUsage();
         }
         renderUsageDonut();
+        renderPlanBar();
         renderTopClients(ovClients);
         renderBusiest(ovClients);
         renderEvents(ovEvents);
