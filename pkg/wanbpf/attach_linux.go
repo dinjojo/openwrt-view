@@ -306,13 +306,11 @@ func (lc *linuxCollector) read(hooks []string) (*Snapshot, error) {
 			// own worst sample (same tiny race as the queue delay).
 			// Re-read first: vals is the snapshot Iterate took, and
 			// Put would clobber counters the kernel advanced since.
-			var reset []qDelayPerCPU
+			var reset qDelayPerCPU
 			if err := m.Lookup(mk, &reset); err != nil {
 				continue
 			}
-			for i := range reset {
-				reset[i].MaxNs = 0
-			}
+			reset.MaxNs = 0
 			if err := m.Put(mk, reset); err != nil {
 				break
 			}
