@@ -5136,7 +5136,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         };
         const dl = vals(d.wanrx), ul = vals(d.wantx);
         if (dl.length || ul.length) {
-          const hdr = ['now', 'avg', 'peak'].map(l => `<span class="xs muted" style="text-align:right">${l}</span>`).join('');
+          // avg/peak cover the charted window, not the live second — say so.
+          const win = intRange === 'billing' ? 'period' : intRange === 'custom' ? 'custom' : intRange.toUpperCase();
+          const hdr = ['now', 'avg·' + win, 'peak·' + win].map(l => `<span class="xs muted" style="text-align:right">${l}</span>`).join('');
           stats.innerHTML = '<span></span>' + hdr + '<span></span>' +
             row('↑', 'ul', ul, 'ov-now-ul') + row('↓', 'dl', dl, 'ov-now-dl');
         } else stats.innerHTML = '';
