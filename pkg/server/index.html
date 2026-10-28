@@ -855,7 +855,7 @@
       <!-- Row 1: Internet · Gateway · Network -->
       <div class="ov-grid ov-g3">
         <section class="sect ov-card" id="ov-wan-card">
-          <div class="ov-card-cap"><span class="ov-cap-t">WAN Throughput</span><span class="ov-cap-sub">live, updates every second</span></div>
+          <div class="ov-card-cap"><span class="ov-cap-t">WAN Throughput</span><span class="ov-cap-sub">live · 5 s rolling avg</span></div>
           <div class="ov-wan-live">
             <span class="ov-dir"><span class="ov-arrow ul">↑</span><b class="num" id="ov-up">–</b><span class="ov-dir-lab">Mb/s up</span></span>
             <span class="ov-dir"><span class="ov-arrow dl">↓</span><b class="num" id="ov-down">–</b><span class="ov-dir-lab">Mb/s down</span></span>
@@ -891,7 +891,7 @@
           </div>
           <div id="ov-aps-rows" class="ov-ap-rows"></div>
           <div id="ov-busy" class="ov-busy" style="display:none">
-            <div class="m-lab" style="margin-bottom:4px">Busiest right now <span class="sub">live per-device rates</span></div>
+            <div class="m-lab" style="margin-bottom:4px">Busiest right now <span class="sub">per-device rates · 10 s poll</span></div>
             <div id="ov-busy-rows"></div>
           </div>
           <button id="ov-wifi-open" class="link" title="Open the Clients tab">All clients
@@ -2226,6 +2226,21 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
 
     let rendered = new Set();
 
+    // Rolling average behind the WAN hero and the stats row's now column.
+    // A raw 1 s delta flashes to 0.0 between bursts of bursty traffic
+    // (Chromecast buffering), which made the hero disagree with the
+    // Busiest-right-now rows — same traffic, different smoothing. Five
+    // 1 s samples keeps bursts visible ~5 s and tracks the per-device
+    // cadence closely.
+    const wanSmooth = { up: [], down: [] };
+    let wanSmoothed = { up: null, down: null };
+    function sampleWanSmoothed() {
+      const push = (arr, v) => { arr.push(v); if (arr.length > 5) arr.shift(); return arr.reduce((a, x) => a + x, 0) / arr.length; };
+      wanSmoothed.up = push(wanSmooth.up, wanUp());
+      wanSmoothed.down = push(wanSmooth.down, wanDown());
+      return wanSmoothed;
+    }
+
     function handleData(payload) {
       const ifaces = Array.isArray(payload.interfaces) ? payload.interfaces : [];
       latestIfaces = ifaces; // overview hero reads the live snapshot
@@ -2233,14 +2248,15 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       // pollOverview cadence — otherwise the big numbers lag the live
       // shaper cards and the topology node reading the same snapshot.
       if (ifaces.length) {
-        tickNum(document.getElementById('ov-down'), ovMbit(wanDown()));
-        tickNum(document.getElementById('ov-up'), ovMbit(wanUp()));
+        const sm = sampleWanSmoothed();
+        tickNum(document.getElementById('ov-down'), ovMbit(sm.down));
+        tickNum(document.getElementById('ov-up'), ovMbit(sm.up));
         // The WAN throughput card's "now" column rides the same live
         // snapshot: the history sample behind it is up to a minute stale,
         // and during a full-rate burst the big numbers and the stats row
         // told different stories.
-        tickNum(document.getElementById('ov-now-ul'), ovMbit(wanUp()));
-        tickNum(document.getElementById('ov-now-dl'), ovMbit(wanDown()));
+        tickNum(document.getElementById('ov-now-ul'), ovMbit(sm.up));
+        tickNum(document.getElementById('ov-now-dl'), ovMbit(sm.down));
       }
       // Keep the exit-paths strip's direct-line card in step with the SSE
       // snapshot; lastTunnel carries the rates from the last /api/tunnel poll.
@@ -5169,10 +5185,11 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     function renderOverview() {
       tickTopoRates();
 
-      // Big live numbers from the SSE interface stats.
-      if (latestIfaces.length) {
-        document.getElementById('ov-down').textContent = ovMbit(wanDown());
-        document.getElementById('ov-up').textContent = ovMbit(wanUp());
+      // Big live numbers from the SSE interface stats — same smoothed
+      // values the 1 s handler shows (no new sample here).
+      if (latestIfaces.length && wanSmoothed.down != null) {
+        document.getElementById('ov-down').textContent = ovMbit(wanSmoothed.down);
+        document.getElementById('ov-up').textContent = ovMbit(wanSmoothed.up);
       }
 
       // Internet card chart, following the selected window (1h/3h/custom).
