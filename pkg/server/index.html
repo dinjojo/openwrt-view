@@ -2235,6 +2235,12 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (ifaces.length) {
         tickNum(document.getElementById('ov-down'), ovMbit(wanDown()));
         tickNum(document.getElementById('ov-up'), ovMbit(wanUp()));
+        // The WAN throughput card's "now" column rides the same live
+        // snapshot: the history sample behind it is up to a minute stale,
+        // and during a full-rate burst the big numbers and the stats row
+        // told different stories.
+        tickNum(document.getElementById('ov-now-ul'), ovMbit(wanUp()));
+        tickNum(document.getElementById('ov-now-dl'), ovMbit(wanDown()));
       }
       // Keep the exit-paths strip's direct-line card in step with the SSE
       // snapshot; lastTunnel carries the rates from the last /api/tunnel poll.
@@ -5121,18 +5127,18 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         const vals = arr => (arr || []).slice(-n).filter(v => v != null && !isNaN(v));
         // Grid keeps the ↓ and ↑ rows column-aligned instead of drifting
         // with each number's width.
-        const row = (arrow, cls, a) => {
+        const row = (arrow, cls, a, id) => {
           if (!a.length) return '';
           const now = a[a.length - 1], avg = a.reduce((x, v) => x + v, 0) / a.length, peak = Math.max(...a);
-          const num = v => `<span class="num" style="text-align:right">${v.toFixed(1)}</span>`;
-          return `<span class="ov-arrow ${cls}">${arrow}</span>` + num(now) + num(avg) + num(peak) +
+          const num = (v, id) => `<span class="num"${id ? ` id="${id}"` : ''} style="text-align:right">${v.toFixed(1)}</span>`;
+          return `<span class="ov-arrow ${cls}">${arrow}</span>` + num(now, id) + num(avg) + num(peak) +
             '<span class="xs muted">Mbit/s</span>';
         };
         const dl = vals(d.wanrx), ul = vals(d.wantx);
         if (dl.length || ul.length) {
           const hdr = ['now', 'avg', 'peak'].map(l => `<span class="xs muted" style="text-align:right">${l}</span>`).join('');
           stats.innerHTML = '<span></span>' + hdr + '<span></span>' +
-            row('↑', 'ul', ul) + row('↓', 'dl', dl);
+            row('↑', 'ul', ul, 'ov-now-ul') + row('↓', 'dl', dl, 'ov-now-dl');
         } else stats.innerHTML = '';
       }
     }
