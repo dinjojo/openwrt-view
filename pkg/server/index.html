@@ -372,7 +372,7 @@
     .du-bar { flex: 1 1 0; min-width: 4px; max-width: 32px; height: 100%; display: flex; align-items: flex-end; cursor: pointer; position: relative; z-index: 1; }
     #du-chart { justify-content: space-evenly; }
     .du-bar i { display: block; width: 100%; background: var(--accent); border-radius: 4px 4px 0 0; opacity: .82; transition: opacity .15s; }
-    .du-bar:hover i { opacity: 1; }
+    .du-bar:hover i { filter: brightness(1.18); }
     .du-grid-line { position: absolute; left: 0; right: 3.4rem; border-top: 1px dashed var(--groove); z-index: 0; }
     .du-grid-lab { position: absolute; right: 0; transform: translateY(-50%); font-size: var(--t-2xs); color: var(--ink-3); font-variant-numeric: tabular-nums; }
     .du-axis-lab { position: absolute; top: 0; transform: translateX(-50%); font-size: var(--t-2xs); color: var(--ink-3); white-space: nowrap; }
@@ -389,8 +389,8 @@
     /* Wi-Fi band split */
     .ov-bandbar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--well); margin-bottom: var(--s3); }
     .ov-bandbar i { display: block; height: 100%; }
-    .ov-bandbar i.b24 { background: var(--dl); }
-    .ov-bandbar i.b5 { background: color-mix(in srgb, var(--dl) 35%, var(--panel)); }
+    .ov-bandbar i.b24 { background: linear-gradient(90deg, var(--dl), color-mix(in srgb, var(--dl) 55%, white)); }
+    .ov-bandbar i.b5 { background: linear-gradient(90deg, color-mix(in srgb, var(--dl) 80%, white), var(--dl)); }
     .ov-band-row { display: flex; align-items: baseline; gap: var(--s3); padding: 7px 2px;
       border-top: 1px solid var(--hair); font-size: var(--t-sm); }
     .ov-band-row b { color: var(--dl); font-size: 1.05rem; font-variant-numeric: tabular-nums; }
@@ -593,9 +593,31 @@
     .lrow .t { font-weight: 600; color: var(--ink); }
     .lrow .s { font-size: var(--t-sm); color: var(--ink-2); }
     .lrow .v { font-family: var(--f-num); font-variant-numeric: tabular-nums; font-weight: 500; }
-    .ev { display: grid; grid-template-columns: 14px 5.5rem minmax(0, 1fr); gap: var(--s2); align-items: baseline; padding: 6px 0; font-size: var(--t-sm); }
+    .ev { display: grid; grid-template-columns: 22px 5.5rem minmax(0, 1fr); gap: var(--s2); align-items: baseline; padding: 6px 0; font-size: var(--t-sm); }
     .ev .when { font-family: var(--f-num); font-size: var(--t-xs); color: var(--ink-2); }
     .ev .mk { display: flex; justify-content: center; align-self: center; color: var(--ink-3); }
+    .ev .evic { width: 20px; height: 20px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+    .ev .evic svg { width: 12px; height: 12px; }
+    /* Donut ↔ legend hover sync (JS toggles classes) */
+    .ov-donut circle { transition: opacity .18s ease, stroke-width .18s ease; }
+    .ov-donut.dimming circle:not(.hi) { opacity: .3; }
+    .ov-donut circle.hi { stroke-width: 21; }
+    /* Daily usage: plan-reset tick under a bar + 7-day average overlay */
+    #du-chart { position: relative; }
+    .du-bar .rtick { position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%);
+      width: 3px; height: 5px; border-radius: 2px; background: var(--warn, #f59e0b); opacity: .75; }
+    .du-avg { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+    /* Value change micro-animation on the hero's live numbers */
+    @keyframes numIn { from { opacity: .5; } to { opacity: 1; } }
+    .num-tick { animation: numIn .25s ease; }
+    /* Per-check icons in the overview System health + Wi-Fi band rows */
+    .ov-sh-row .ic, .ov-band-row .ic { display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; border-radius: 7px; flex: none; align-self: center; }
+    .ov-sh-row .ic svg, .ov-band-row .ic svg { width: 13px; height: 13px; }
+    /* Dark theme: soften the white icon badges so they don't glare */
+    html[data-theme="dark"] .dev-real,
+    html[data-theme="dark"] .topo-ic.real,
+    html[data-theme="dark"] .ov-tile.real { background: rgba(238, 241, 246, .88); box-shadow: 0 1px 5px rgba(0,0,0,.4); }
     .scrollbox { max-height: 24rem; overflow-y: auto; padding-right: var(--s2); }
     .gauge { display: grid; grid-template-columns: 6.5rem 1fr 4rem; align-items: center; gap: var(--s3); font-size: var(--t-sm); }
     .gauge .bar { margin-top: 0; }
@@ -1370,6 +1392,35 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       return '<span class="lamp' + (size ? ' ' + size : '') + '" data-state="' + s + '"></span>';
     }
 
+    /** Shared stroke-glyph set (feather-style paths) for event and health
+     *  row chips — the same visual language as the device-type tiles. */
+    const STROKE_ICONS = {
+      globe:   '<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+      pulse:   '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+      shield:  '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+      sliders: '<path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/>',
+      cpu:     '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3"/><path d="M15 1v3"/><path d="M9 20v3"/><path d="M15 20v3"/><path d="M1 9h3"/><path d="M1 15h3"/><path d="M20 9h3"/><path d="M20 15h3"/>',
+      wifi:    '<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><path d="M12 20h.01"/>',
+      power:   '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><path d="M12 2v10"/>',
+      zap:     '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+      server:  '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/>',
+      gear:    '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+    };
+    /** A stroke glyph on a tinted rounded chip. */
+    function tintIcon(icon, color, size) {
+      return '<span class="evic" style="width:' + size + 'px;height:' + size + 'px;background:' + color + '22;color:' + color + '">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">' + STROKE_ICONS[icon] + '</svg></span>';
+    }
+    /** Swap a hero number's value with a quick ease — makes 1s updates read
+     *  as movement instead of a jarring text jump. */
+    function tickNum(el, txt) {
+      if (!el || el.textContent === txt) return;
+      el.textContent = txt;
+      el.classList.remove('num-tick');
+      void el.offsetWidth;
+      el.classList.add('num-tick');
+    }
+
     /** Safely escape HTML to prevent XSS. */
     function h(s) {
       if (s == null) return '';
@@ -1792,9 +1843,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
             stroke:   s.stroke,
             fill:     s.fill,
             dash:     s.dash,   // dashed series (e.g. "worst" lines) must stay dashed
-            width:    1.5,
+            width:    s.width || 1.5,
             spanGaps: true,
-            points:   { show: false },
+            points:   s.points || { show: false },
           })),
         ],
         axes: [
@@ -2182,9 +2233,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       // pollOverview cadence — otherwise the big numbers lag the live
       // shaper cards and the topology node reading the same snapshot.
       if (ifaces.length) {
-        const dnEl = document.getElementById('ov-down'), upEl = document.getElementById('ov-up');
-        if (dnEl) dnEl.textContent = ovMbit(wanDown());
-        if (upEl) upEl.textContent = ovMbit(wanUp());
+        tickNum(document.getElementById('ov-down'), ovMbit(wanDown()));
+        tickNum(document.getElementById('ov-up'), ovMbit(wanUp()));
       }
       // Keep the exit-paths strip's direct-line card in step with the SSE
       // snapshot; lastTunnel carries the rates from the last /api/tunnel poll.
@@ -4861,7 +4911,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         topoNode('clients', realIcon(ICON_CDN + 'netgear-orbi.png', ICON_APBOX, 40), apModel, apSub, apReachable ? '' : 'offline', 'ap') +
         satChain +
         topoLink('topo-wifi-rate', '–') +
-        topoNode('clients', ICON_CLIENTS, onlineN + ' Clients', 'online now', '', 'clients');
+        topoNode('clients', '<span class="dev-tile" style="width:40px;height:40px;background:linear-gradient(135deg,#22c55e,#14b8a6);color:#fff">' +
+          ICON_CLIENTS.replace('width="26" height="26"', 'width="30" height="30"') + '</span>',
+          onlineN + ' Clients', 'online now', '', 'clients');
     }
 
     /** Cheap SSE-side refresh of the topology rate labels: WAN from the
@@ -4960,8 +5012,20 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         const W = Math.max(200, cd.clientWidth - 4);
         cd.innerHTML = ''; // makeChart appends; clear so re-renders don't stack
         if (lhPlot) { try { lhPlot.destroy(); } catch (_) {} lhPlot = null; }
+        // Spike markers: latency samples beyond ~p90 (or 2× the median —
+        // whichever is higher) get a red dot, mirroring the spike the eye
+        // already catches.
+        const rt = d.rtt_ms.filter(v => v != null).slice().sort((a, b) => a - b);
+        const q = f => rt.length ? rt[Math.floor(f * (rt.length - 1))] : 0;
+        const thr = Math.max(q(.90), q(.5) * 2);
+        const spikes = d.rtt_ms.map(v => (v != null && v > thr) ? v : null);
+        const spikeSeries = spikes.some(v => v != null)
+          ? [{ label: 'latency spikes', data: spikes, stroke: 'rgba(239,68,68,.9)', width: 0,
+              points: { show: true, size: 7, width: 0, fill: 'rgba(239,68,68,.85)', stroke: 'rgba(239,68,68,.9)' } }]
+          : [];
         lhPlot = makeChart(cd, W, 150, d.t, [
-          { label: 'WAN latency (ms)', data: d.rtt_ms, stroke: cv('--dl'), fill: cva('--ok', 0.10) },
+          { label: 'WAN latency (ms)', data: d.rtt_ms, stroke: cv('--dl'), fill: cva('--ok', 0.16), width: 2 },
+          ...spikeSeries,
         ], '', v => v == null ? '' : v.toFixed(1), 'ov-x');
       } catch (_) { /* transient — the chart stays stale */ }
     }
@@ -5160,7 +5224,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         const rbrMac = Object.keys(perAp).find(k => k !== '__router' && !satMacs[k]);
         const rbrN = (perAp.__router || []).length + (perAp[rbrMac] || []).length;
         rows.push('<button class="ov-ap-row" data-tab-jump="clients">' +
-          realIcon(ICON_CDN + 'netgear-orbi.png', '<span class="ov-ap-dot"></span>', 24) +
+          realIcon(ICON_CDN + 'netgear-orbi.png', '<span class="ov-ap-dot"></span>', 26) +
           '<span class="n">' + h(lastOrbi.model || 'Orbi router') + ' · AP</span>' +
           '<span class="cnt">' + rbrN + ' clients</span></button>');
         (lastOrbi.satellites || []).forEach((s, i) => {
@@ -5169,7 +5233,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           const n = (perAp[k] || []).length;
           rows.push('<button class="ov-ap-row" data-tab-jump="clients">' +
             '<span style="opacity:' + (off ? '.45' : '1') + ';display:inline-flex">' +
-            realIcon(ICON_CDN + 'netgear-orbi.png', '<span class="ov-ap-dot' + (off ? ' off' : '') + '"></span>', 24) + '</span>' +
+            realIcon(ICON_CDN + 'netgear-orbi.png', '<span class="ov-ap-dot' + (off ? ' off' : '') + '"></span>', 26) + '</span>' +
             '<span class="n">' + h(s.model || s.name || s.mac) + ' · Satellite' + (off ? ' — offline' : '') + '</span>' +
             '<span class="cnt">' + (off ? '—' : n + ' clients') + '</span></button>');
         });
@@ -5191,18 +5255,37 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           (n5 ? '<i class="b5" style="width:' + p5 + '%"></i>' : '') +
           (n24 ? '<i class="b24" style="width:' + p24 + '%"></i>' : '');
         document.getElementById('ov-bandrows').innerHTML =
-          '<div class="ov-band-row"><b class="num">' + p5 + '%</b><span>5 GHz</span>' +
+          '<div class="ov-band-row"><b class="num">' + p5 + '%</b>' +
+            '<span class="ic" style="background:#0069ff22;color:#0069ff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">' + STROKE_ICONS.wifi + '</svg></span>' +
+            '<span>5 GHz</span>' +
             '<span class="meta">' + n5 + ' client' + (n5 === 1 ? '' : 's') + '</span></div>' +
-          '<div class="ov-band-row"><b class="num">' + p24 + '%</b><span>2.4 GHz</span>' +
+          '<div class="ov-band-row"><b class="num">' + p24 + '%</b>' +
+            '<span class="ic" style="background:#16a34a22;color:#16a34a"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">' + STROKE_ICONS.wifi + '</svg></span>' +
+            '<span>2.4 GHz</span>' +
             '<span class="meta">' + n24 + ' client' + (n24 === 1 ? '' : 's') + '</span></div>';
         document.getElementById('ov-wifi-line').textContent =
           wifi.length + ' on Wi-Fi · ' + n5 + '× 5 GHz · ' + n24 + '× 2.4 GHz';
       }
 
-      // System health rows: one lamp + word per service, plus a live value
-      // where one exists (SQM grade, CPU load, AP client counts).
+      // System health rows: one icon chip + word per service, plus a live
+      // value where one exists (SQM grade, CPU load, AP client counts).
       const rows = [];
-      const shRow = (name, state, val) => '<div class="ov-sh-row"><span class="n">' + name + '</span>' +
+      const SH_ICON = [
+        [/internet/i, 'globe', '#0069ff'],
+        [/sqm grade/i, 'pulse', '#8b5cf6'],
+        [/warp/i, 'shield', '#7c3aed'],
+        [/shaping/i, 'sliders', '#0ea5e9'],
+        [/router/i, 'cpu', '#f59e0b'],
+        [/satellite/i, 'server', '#14b8a6'],
+        [/wi-?fi/i, 'wifi', '#16a34a'],
+      ];
+      const shIcon = name => {
+        const m = SH_ICON.find(([re]) => re.test(name)) || [null, 'pulse', '#94a3b8'];
+        return '<span class="ic" style="background:' + m[2] + '22;color:' + m[2] + '">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">' + STROKE_ICONS[m[1]] + '</svg></span>';
+      };
+      const shRow = (name, state, val) => '<div class="ov-sh-row">' + shIcon(name) +
+        '<span class="n">' + name + '</span>' +
         (val ? '<span class="sh-val">' + val + '</span>' : '') +
         lamp(state, 'sm') + '</div>';
       const byName = n => (hchecks.find(c => c.name === n) || {});
@@ -5406,6 +5489,19 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         }, 0));
         drawAreaSparkline(document.getElementById('spk-ul-' + i), series, DONUT_COLORS[i] || '#9aa4b2', 'g-ul-' + i);
       });
+      // Hover a legend row ↔ highlight its slice: hovered arc pops
+      // (thicker stroke), the others recede. Row order matches slice order.
+      const donut = document.getElementById('ov-donut');
+      if (donut) legend.querySelectorAll('.ov-usage-row').forEach((row, i) => {
+        row.addEventListener('mouseenter', () => {
+          donut.classList.add('dimming');
+          donut.querySelectorAll('circle').forEach((c, j) => c.classList.toggle('hi', j === i));
+        });
+        row.addEventListener('mouseleave', () => {
+          donut.classList.remove('dimming');
+          donut.querySelectorAll('circle').forEach(c => c.classList.remove('hi'));
+        });
+      });
     }
 
     /** Best-effort device-type guess from the hostname — the router
@@ -5531,13 +5627,28 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         const when = today
           ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
           : (dayNames[d.getDay()] + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-        // Kinds share the severity lamp; "satellite" (mesh unit offline /
-        // back online) gets the small router glyph — muted when it's a
-        // recovery, severity-tinted when a unit dropped off.
+        // Kind gets its own tinted glyph chip (severity overrides the
+        // tint — warn amber, crit red); "satellite" keeps the router
+        // glyph — muted on a recovery, severity-tinted when a unit
+        // dropped off. Unknown kinds fall back to the severity lamp.
         const sevState = ev.sev === 'ok' || ev.sev === 'warn' || ev.sev === 'crit' ? ev.sev : 'info';
+        const sevColor = { warn: '#f59e0b', crit: '#ef4444' }[ev.sev] || null;
+        const EV_KIND_META = {
+          wan:     { i: 'globe',  c: '#0069ff' },
+          monitor: { i: 'pulse',  c: '#64748b' },
+          config:  { i: 'gear',   c: '#94a3b8' },
+          reboot:  { i: 'power',  c: '#f59e0b' },
+          probe:   { i: 'zap',    c: '#8b5cf6' },
+          warp:    { i: 'shield', c: '#7c3aed' },
+          dns:     { i: 'server', c: '#14b8a6' },
+          wifi:    { i: 'wifi',   c: '#16a34a' },
+        };
+        const evMeta = EV_KIND_META[ev.kind];
         const mark = ev.kind === 'satellite'
           ? '<span class="mk ' + (ev.sev === 'warn' || ev.sev === 'crit' ? sevState : '') + '">' +
               ICON_ROUTER.replace('width="15" height="15"', 'width="12" height="12"') + '</span>'
+          : evMeta
+          ? '<span class="mk">' + tintIcon(evMeta.i, sevColor || evMeta.c, 20) + '</span>'
           : '<span class="mk">' + lamp(sevState, 'sm') + '</span>';
         return '<div class="ev">' + mark +
           '<span class="when">' + when + '</span>' +
@@ -5554,7 +5665,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     // into its days. Data is the per-client daily files the server
     // already persists; totals are all devices summed.
     let duState = { grain: 'days', month: null }; // month = 'YYYY-MM' when drilled in
-    let duCache = null, duAt = 0;
+    let duCache = null, duAt = 0, duPlan = null;
 
     async function loadUsageBars() {
       if (!duCache || Date.now() - duAt > 300000) {
@@ -5564,6 +5675,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         } catch (_) { d = null; }
         if (!d || !Array.isArray(d.days)) return;
         duCache = d.days.filter(x => x.date);
+        duPlan = d.plan || null;
         duAt = Date.now();
       }
       renderUsageBars();
@@ -5571,10 +5683,43 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
 
     function duBars(rows) {
       const max = Math.max(...rows.map(r => r.gb), 1e-9);
-      return rows.map(r =>
-        '<div class="du-bar" role="button" tabindex="0" data-du="' + h(r.key) + '" title="' + h(r.tip) + '">' +
-          '<i style="height:' + Math.max(r.gb > 0 ? 4 : 2, r.gb / max * 100).toFixed(0) + '%"></i>' +
-        '</div>').join('');
+      // Volume color-scale: quiet days recede (dimmer, cooler), heavy
+      // days come forward. The plan-reset day gets a small amber tick
+      // under its bar.
+      const resetDay = duPlan && duPlan.reset_day;
+      return rows.map(r => {
+        const frac = r.gb / max;
+        const op = (0.42 + 0.58 * Math.min(1, frac)).toFixed(2);
+        const tick = resetDay && /^\d{4}-\d{2}-\d{2}$/.test(r.key) && parseInt(r.key.slice(-2), 10) === resetDay
+          ? '<u class="rtick" title="plan resets on day ' + resetDay + '"></u>' : '';
+        return '<div class="du-bar" role="button" tabindex="0" data-du="' + h(r.key) + '" title="' + h(r.tip) + '">' +
+          tick +
+          '<i style="height:' + Math.max(r.gb > 0 ? 4 : 2, frac * 100).toFixed(0) + '%;opacity:' + op + '"></i>' +
+        '</div>';
+      }).join('');
+    }
+
+    /** Thin dashed 7-day rolling-average line over the day bars, measured
+     *  against the rendered bar tops so it lines up with the scale. */
+    function duAvgOverlay(chart, rows) {
+      if (rows.length < 4) return; // fewer bars: the ramp would read as noise
+      const bars = chart.querySelectorAll('.du-bar');
+      if (bars.length !== rows.length) return;
+      const max = Math.max(...rows.map(r => r.gb), 1e-9);
+      const H = chart.clientHeight, W = chart.clientWidth;
+      if (!H || !W) return;
+      const pts = rows.map((r, i) => {
+        const win = rows.slice(Math.max(0, i - 6), i + 1);
+        const avg = win.reduce((a, x) => a + x.gb, 0) / win.length;
+        const box = bars[i].getBoundingClientRect();
+        const cbox = chart.getBoundingClientRect();
+        const x = box.left - cbox.left + box.width / 2;
+        const y = H * (1 - (avg / max) * 0.96);
+        return x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      chart.insertAdjacentHTML('beforeend',
+        '<svg class="du-avg" width="' + W + '" height="' + H + '">' +
+        '<polyline points="' + pts + '" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 4" stroke-linecap="round" opacity=".8"/></svg>');
     }
 
     function renderUsageBars() {
@@ -5613,6 +5758,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         }));
         chart.innerHTML = duBars(rows);
         chart.querySelectorAll('.du-bar').forEach(b => b.onclick = null); // days don't drill deeper
+        duAvgOverlay(chart, rows);
         const sum = rows.reduce((a, r) => a + r.gb, 0);
         title.textContent = duState.month ? 'Daily usage · ' + duState.month : 'Daily usage';
         sub.textContent = rows.length + ' days · ' + gb1(sum) + ' total · avg ' + gb1(sum / Math.max(1, rows.length)) + '/day';
