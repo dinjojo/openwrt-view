@@ -338,7 +338,7 @@
     .ov-busy-row:hover { background: var(--well); }
     .ov-busy-row .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ov-busy-row .rates { margin-left: auto; color: var(--ink-2); font-variant-numeric: tabular-nums; flex: none; }
-    .ov-busy-row .m-spark { width: 56px; height: 18px; flex: none; }
+    .ov-busy-row .m-spark { width: 36px; height: 18px; flex: none; }
 
     /* Usage donut */
     .ov-usage { display: flex; align-items: center; gap: var(--s4); }
@@ -348,7 +348,9 @@
     .ov-donut-c b { font-size: 1.25rem; }
     .ov-donut-c span { font-size: var(--t-2xs); color: var(--ink-2); }
     .ov-usage-legend { flex: 1; display: flex; flex-direction: column; gap: 7px; font-size: var(--t-xs); min-width: 0; }
-    .ov-usage-row { display: flex; align-items: baseline; gap: 8px; }
+    .ov-usage-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+    .ov-usage-spark { flex-basis: 100%; height: 14px; margin: -1px 0 3px 17px; }
+    #clm-title { display: flex; align-items: center; gap: 9px; }
     .ov-usage-dot { width: 9px; height: 9px; border-radius: 3px; flex: none; align-self: center; }
     .ov-usage-row .nm { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); min-width: 0; }
     .ov-usage-row .gb { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -3365,7 +3367,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       clModal.vendor = vendor;
       clModal.range = '24h';
       _setPillBtns('.crange-btn', 'crange', clModal.range);
-      document.getElementById('clm-title').textContent = name;
+      document.getElementById('clm-title').innerHTML =
+        realIcon(brandIconURL(name) || brandIconURL(vendor), devIcon({ name: name }, 18), 26) + h(name);
       const sub = [ip, mac, vendor].filter(Boolean).join(' · ');
       document.getElementById('clm-sub').textContent = sub;
       document.getElementById('clm-rx').textContent = '–';
@@ -3683,7 +3686,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       const block = document.getElementById('ov-busy');
       if (!block) return;
       const rows = (cl || []).filter(c => c.online && (c.rx_rate > 0 || c.tx_rate > 0))
-        .map(c => ({ name: c.name || c.ip || c.mac, rx: c.rx_rate || 0, tx: c.tx_rate || 0 }))
+        .map(c => ({ name: c.name || c.ip || c.mac, rx: c.rx_rate || 0, tx: c.tx_rate || 0, c }))
         .sort((a, b) => (b.rx + b.tx) - (a.rx + a.tx))
         .slice(0, 3);
       block.style.display = rows.length ? '' : 'none';
@@ -3695,9 +3698,11 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       });
       Object.keys(busyHist).forEach(k => { if (!rows.some(r => r.name === k)) delete busyHist[k]; });
       document.getElementById('ov-busy-rows').innerHTML = rows.map((r, i) =>
-        '<div class="ov-busy-row"><span class="n">' + h(r.name) + '</span>' +
+        '<div class="ov-busy-row">' +
+        realIcon(brandIconURL(r.name) || brandIconURL(r.c && r.c.vendor), devIcon(r.c, 12), 18) +
+        '<span class="n">' + h(r.name) + '</span>' +
         '<svg id="spk-busy-' + i + '" class="m-spark" viewBox="0 0 100 28" preserveAspectRatio="none" role="img" aria-label="' + h(r.name) + ' rate trend"></svg>' +
-        '<span class="rates">' + fmtBits(r.rx) + ' \u2193 / ' + fmtBits(r.tx) + ' \u2191</span></div>').join('');
+        '<span class="rates">' + '\u2193' + fmtBits(r.rx) + ' \u2191' + fmtBits(r.tx) + '</span></div>').join('');
       rows.forEach((r, i) =>
         drawAreaSparkline(document.getElementById('spk-busy-' + i),
           busyHist[r.name] || [], '#0069ff', 'g-busy-' + i));
@@ -5329,9 +5334,11 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           ? 'mac:' + r.mac : 'name:' + r.name.toLowerCase();
         if (byName[key]) {
           byName[key].gb += r.gb;
+          byName[key].macs.push(r.mac);
           byName[key].extra = (byName[key].extra || 0) + 1;
         } else {
           byName[key] = r;
+          r.macs = [r.mac];
           merged.push(r);
         }
       }
@@ -5379,12 +5386,26 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           ? ' title="Traffic that left through the WARP tunnel — inside the tunnel every client\'s traffic is multiplexed into one encrypted connection, so per-device identity is lost — plus the router itself (DNS, NTP, updates, speed tests). Near zero on days the tunnel is down."'
           : '') + '>' +
           '<span class="ov-usage-dot" style="background:' + (DONUT_COLORS[i] || '#9aa4b2') + '"></span>' +
+          (s.macs ? '<svg id="spk-ul-' + i + '" class="m-spark ov-usage-spark" viewBox="0 0 100 28" preserveAspectRatio="none" role="img" aria-label="' + h(s.name) + ' 7-day usage trend"></svg>' : '') +
           '<span class="nm">' + h(s.name) +
           (s.extra > 0 ? ' <span class="num xs muted">+' + s.extra + ' MACs</span>' : '') + '</span>' +
           '<span class="gb">' + (s.gb >= 1 ? s.gb.toFixed(1) + ' GB' : (s.gb * 1024).toFixed(0) + ' MB') + '</span>' +
           '<span class="pc">' + pct.toFixed(0) + '%</span>' +
         '</div>';
       }).join('');
+      // Per-device 7-day usage sparklines (last 7 daily buckets, summed
+      // across the device's MACs), in the slice's own color. The "Other"
+      // fold-in has no identity, so it gets no sparkline.
+      const dayList = ((ovUsageCache && ovUsageCache.days) || []).slice()
+        .sort((a, b) => String(a.date).localeCompare(String(b.date))).slice(-7);
+      slices.forEach((s, i) => {
+        if (!s.macs) return;
+        const series = dayList.map(d => (s.macs || []).reduce((a, m) => {
+          const c = d.clients && d.clients[m];
+          return a + (c ? (c.rx_gb || 0) + (c.tx_gb || 0) : 0);
+        }, 0));
+        drawAreaSparkline(document.getElementById('spk-ul-' + i), series, DONUT_COLORS[i] || '#9aa4b2', 'g-ul-' + i);
+      });
     }
 
     /** Best-effort device-type guess from the hostname — the router
