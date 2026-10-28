@@ -397,6 +397,24 @@ var vmRanges = map[string]vmRangeSpec{
 	"30d": {step: "1800s", rateLimit: "1h"},
 }
 
+// rateWindow sizes a rate() window for a query step. node_exporter is
+// scraped every 10 s, so anything under 20 s can catch fewer than two
+// samples and drop points; larger steps use the step itself so each
+// chart point reflects roughly its own slice of traffic instead of a
+// multi-minute slab that dilutes short bursts.
+func rateWindow(step string) string {
+	var n int
+	var unit byte
+	if _, err := fmt.Sscanf(step, "%d%c", &n, &unit); err != nil {
+		return "20s"
+	}
+	secs := n * map[byte]int{'s': 1, 'm': 60, 'h': 3600}[unit]
+	if secs < 20 {
+		secs = 20
+	}
+	return strconv.Itoa(secs) + "s"
+}
+
 // specForSpan picks a query step and rate window for an arbitrary span
 // (custom from/to windows). Roughly mirrors vmRanges' resolution curve:
 // ~1/240th of the span per point, clamped to the finest/coarsest specs.
@@ -1089,11 +1107,15 @@ func (s *Server) handleAPIHistorySystem(c fiber.Ctx) error {
 	if err := fetchAvg(`60 * sum(rate(node_network_receive_errs_total{device=~"(wan|pppoe|eth0).*"}[`+spec.rateLimit+`]) + rate(node_network_transmit_errs_total{device=~"(wan|pppoe|eth0).*"}[`+spec.rateLimit+`]) + rate(node_network_receive_drop_total{device=~"(wan|pppoe|eth0).*"}[`+spec.rateLimit+`]) + rate(node_network_transmit_drop_total{device=~"(wan|pppoe|eth0).*"}[`+spec.rateLimit+`]) + rate(node_network_transmit_carrier_total{device=~"(wan|pppoe|eth0).*"}[`+spec.rateLimit+`]))`, &out.WANErrs); err != nil {
 		return c.Status(502).SendString(`{"error":"` + err.Error() + `"}`)
 	}
-	// Actual WAN throughput (download = rx, upload = tx), Mbit/s.
-	if err := fetchAvg(`rate(node_network_receive_bytes_total{device="pppoe-wan"}[`+spec.rateLimit+`]) * 8 / 1000000`, &out.WANRx); err != nil {
+	// Actual WAN throughput (download = rx, upload = tx), Mbit/s. The rate
+	// window matches the chart step rather than the shared coarse rateLimit:
+	// with the 3 m window, the 3 h view averaged a seconds-long 411 Mbit/s
+	// speed-test burst down to ~50 Mbit/s, so the peak row read ~8x low.
+	wanLimit := rateWindow(spec.step)
+	if err := fetchAvg(`rate(node_network_receive_bytes_total{device="pppoe-wan"}[`+wanLimit+`]) * 8 / 1000000`, &out.WANRx); err != nil {
 		return c.Status(502).SendString(`{"error":"` + err.Error() + `"}`)
 	}
-	if err := fetchAvg(`rate(node_network_transmit_bytes_total{device="pppoe-wan"}[`+spec.rateLimit+`]) * 8 / 1000000`, &out.WANTx); err != nil {
+	if err := fetchAvg(`rate(node_network_transmit_bytes_total{device="pppoe-wan"}[`+wanLimit+`]) * 8 / 1000000`, &out.WANTx); err != nil {
 		return c.Status(502).SendString(`{"error":"` + err.Error() + `"}`)
 	}
 
