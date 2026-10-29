@@ -2297,7 +2297,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           if (cd) drawIntChartSVG(cd,
             [...ovIntLive.dnS, sm.down * 8 / 1e6], [...ovIntLive.ulS, sm.up * 8 / 1e6],
             [...ovIntLive.bloatS, ovIntLive.bloatS[ovIntLive.bloatS.length - 1]],
-            ovIntLive.capNow);
+            ovIntLive.capNow, ovIntLive.t0, ovIntLive.t1 + ovIntLive.step, ovIntLive.peaks);
         }
       }
       // Keep the exit-paths strip's direct-line card in step with the SSE
@@ -5194,8 +5194,12 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       const dnS = (d.wanrx || []).slice(-n), ulS = (d.wantx || []).slice(-n);
       const bloatS = (d.bloatdn || []).slice(-n);
       const t0 = d.t[0], t1 = d.t[n - 1];
+      const step = n > 1 ? (t1 - t0) / (n - 1) : 0;
       const capNow = capD > 0 ? capD / 1.05 : 0;
-      drawIntChartSVG(cd, dnS, ulS, bloatS, capNow);
+      // One step past t1 leaves room for the live point the 1 s tick
+      // appends; the envelope shares the axis so both stay aligned.
+      const peaks = (ovPeakData && ovPeakData.points) || [];
+      drawIntChartSVG(cd, dnS, ulS, bloatS, capNow, t0, t1 + step, peaks);
       // Click a point on the chart to see which devices were talking at
       // that moment (per-device history, ranked at the clicked minute).
       cd.onclick = ev => {
@@ -5207,7 +5211,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       // for the 3H window), so its tail lags the live hero during a
       // burst. Remember this window; the 1 s tick appends the live rate
       // as one extra point and redraws, keeping chart and hero in step.
-      ovIntLive = { dnS, ulS, bloatS, t0, t1, capNow };
+      ovIntLive = { dnS, ulS, bloatS, t0, t1, step, capNow, peaks };
       // LuCI-style now / average / peak for the charted window, per
       // direction — derived from the same series the chart draws, with
       // the 1 s sampler's per-minute maxima folded into the peak.
@@ -5254,9 +5258,13 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
 
     /** Redraw the WAN chart SVG from series arrays. Split out of
      *  renderIntChart so the 1 s tick can append a live point and redraw
-     *  without rebuilding the stats row or refetching history. */
-    function drawIntChartSVG(cd, dnS, ulS, bloat, capNow) {
+     *  without rebuilding the stats row or refetching history. t0/tEnd
+     *  are the drawn time axis; peaks are the 1 s ring's per-minute
+     *  maxima, drawn as a dotted envelope the history's step-averaged
+     *  samples can't show. */
+    function drawIntChartSVG(cd, dnS, ulS, bloat, capNow, t0, tEnd, peaks) {
       if (!cd || cd.offsetParent === null) return;
+      const W = 100, H = 28, PAD = 2;
       cd.innerHTML = '';
       drawDualSparkline(cd, dnS, ulS, 'g-ovint-dl', 'g-ovint-ul', { cap: capNow });
       const scaleMax = Math.max(
@@ -5265,6 +5273,27 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         '<span class="ov-ytick" style="top:0">' + ovYTick(scaleMax) + '</span>' +
         '<span class="ov-ytick" style="bottom:0">0</span>' +
         '<span class="ov-ytick ov-ytick-lat" style="bottom:9px;left:2px;right:auto">── latency ms</span>');
+      // True 1 s peaks as a faint dotted envelope, per direction. History
+      // samples average over their step (30 s in the 3H window), which
+      // dilutes short bursts — a 400 Mbit/s speedtest reads ~126 in the
+      // curve while the starred peak says 399.7. The envelope is the
+      // curve the sampler saw; null-clamped so out-of-scale points stay
+      // inside the frame.
+      if (peaks && peaks.length > 1 && tEnd > t0) {
+        const env = (key, color) => {
+          const pts = peaks.filter(p => p.t >= t0 && p.t <= tEnd)
+            .map(p => (PAD + ((p.t - t0) / (tEnd - t0)) * (W - 2 * PAD)).toFixed(1) + ',' +
+              Math.max(PAD, H - PAD - ((p[key] || 0) / scaleMax) * (H - 2 * PAD)).toFixed(1))
+            .join(' ');
+          return pts.length ? '<polyline points="' + pts + '" fill="none" stroke="' + color +
+            '" stroke-width="1" stroke-dasharray="1 2.5" vector-effect="non-scaling-stroke" opacity="0.65"/>' : '';
+        };
+        const envSvg = env('down', SPARK_DL) + env('up', SPARK_UL);
+        if (envSvg) cd.insertAdjacentHTML('beforeend',
+          '<svg class="ov-bloat" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">' +
+          envSvg + '</svg>' +
+          '<span class="ov-ytick ov-ytick-lat" style="bottom:21px;left:2px;right:auto">··· 1 s peaks</span>');
+      }
       // Latency under load (bufferbloat probe) as a faint amber line on
       // its own scale — the "why it felt slow" story behind the bursts.
       if (bloat && bloat.filter(v => v != null).length > 1) drawBloatOverlay(cd, bloat);
