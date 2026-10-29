@@ -5271,8 +5271,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         ...dnS.filter(v => v != null), ...ulS.filter(v => v != null), capNow, 1e-9);
       cd.insertAdjacentHTML('beforeend',
         '<span class="ov-ytick" style="top:0">' + ovYTick(scaleMax) + '</span>' +
-        '<span class="ov-ytick" style="bottom:0">0</span>' +
-        '<span class="ov-ytick ov-ytick-lat" style="bottom:9px;left:2px;right:auto">── latency ms</span>');
+        '<span class="ov-ytick" style="bottom:0">0</span>');
       // True 1 s peaks as a faint dotted envelope, per direction. History
       // samples average over their step (30 s in the 3H window), which
       // dilutes short bursts — a 400 Mbit/s speedtest reads ~126 in the
@@ -5296,7 +5295,23 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       }
       // Latency under load (bufferbloat probe) as a faint amber line on
       // its own scale — the "why it felt slow" story behind the bursts.
-      if (bloat && bloat.filter(v => v != null).length > 1) drawBloatOverlay(cd, bloat);
+      // Label carries the actual numbers (last probe, window peak) so
+      // the line reads as data instead of a legend swatch; only shown
+      // when the window's payload has the series at all.
+      const bloatVals = (bloat || []).filter(v => v != null && !isNaN(v));
+      if (bloatVals.length > 1) {
+        drawBloatOverlay(cd, bloat);
+        const nowMs = bloatVals[bloatVals.length - 1];
+        const pkMs = Math.max(...bloatVals);
+        const fmtMs = v => v < 10 ? v.toFixed(1) : Math.round(v);
+        const lab = pkMs < 0.5
+          ? '── latency +0 ms'
+          : `── latency pk ${fmtMs(pkMs)} ms`;
+        cd.insertAdjacentHTML('beforeend',
+          `<span class="ov-ytick ov-ytick-lat" style="bottom:9px;left:2px;right:auto" ` +
+          `title="Added latency under load (bufferbloat probe), its own ms scale. A line hugging zero means transfers add no delay; spikes during bursts are the queuing delay that makes things feel slow.">` +
+          lab + `</span>`);
+      }
     }
 
     /** Latency-under-load overlay: the bufferbloat probe's added latency
