@@ -72,8 +72,9 @@ type Server struct {
 	wanbpf       *wanbpf.Collector   // WAN-edge eBPF collectors; nil unless EnableWANBPF
 	wanbpfMu     sync.RWMutex
 	wanbpfSnap   *wanbpf.Snapshot
-	wanbpfHist   *wanbpfRing // minute-resolution latency history for Trends
-	wanbpfAgg    *wanbpfAgg  // 5 s → 1 min accumulator, poller-owned
+	wanbpfHist   *wanbpfRing  // minute-resolution latency history for Trends
+	wanbpfAgg    *wanbpfAgg   // 5 s → 1 min accumulator, poller-owned
+	wanPeaks     *wanPeakRing // per-minute max of the 1 s WAN rates
 	wan          *wan.Poller
 	sys          *sysmon.Pollers
 	orbi         *orbi.Poller
@@ -94,6 +95,7 @@ func New(addr string, interval time.Duration, histCap int, vmURL, version string
 		clients:      make(map[chan []byte]struct{}),
 		pollInterval: interval,
 		history:      history.NewHistoryStore(histCap),
+		wanPeaks:     newWanPeakRing(),
 		clientStore:  clients.New(5*time.Second, vmURL), // nlbwmon fallback cadence; the eBPF source overrides to 1s in SetEBPF
 		orbi:         orb,
 		loc:          time.Local,
@@ -123,6 +125,9 @@ func New(addr string, interval time.Duration, histCap int, vmURL, version string
 	app.Get("/api/history", s.handleAPIHistory)
 	app.Get("/api/history/vm", s.handleAPIHistoryVM)
 	app.Get("/api/history/wan", s.handleAPIHistoryWAN)
+	app.Get("/api/history/wanpeak", func(c fiber.Ctx) error {
+		return c.JSON(fiber.Map{"points": s.wanPeaks.all()})
+	})
 	app.Get("/api/history/system", s.handleAPIHistorySystem)
 	app.Get("/api/history/clients", s.handleAPIHistoryClients)
 	app.Get("/api/history/orbi", s.handleAPIHistoryOrbi)
@@ -289,6 +294,19 @@ func (s *Server) forcePoll() {
 		return
 	}
 	s.history.Record(stats, s.pollInterval)
+	// Fold the 1 s rates into the per-minute peak ring: down is the
+	// shaped ingress mirror (ifb*), up the WAN egress qdisc — the same
+	// sums the dashboard's live WAN card reads from the SSE snapshot.
+	var down, up float64
+	for _, i := range stats {
+		switch {
+		case strings.HasPrefix(i.Interface, "ifb"):
+			down += i.TxBytesPerS
+		case i.Interface == "eth0":
+			up += i.TxBytesPerS
+		}
+	}
+	s.wanPeaks.sample(down*8/1e6, up*8/1e6, time.Now())
 	s.statsMu.Lock()
 	s.stats = stats
 	s.statsMu.Unlock()

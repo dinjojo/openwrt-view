@@ -296,6 +296,21 @@
     .ov-dir .num { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
     .ov-dir-lab { font-size: var(--t-xs); color: var(--ink-2); }
     #ov-int-chart svg { width: 100%; height: 88px; display: block; margin-top: var(--s2); }
+    /* WAN chart axes: capacity-scale ticks over the sparkline, the
+       bufferbloat overlay line, and the spike click-through cursor. */
+    #ov-int-chart { position: relative; cursor: crosshair; }
+    .ov-ytick { position: absolute; right: 2px; z-index: 1; font-size: 9px; line-height: 1.1;
+      color: var(--muted); pointer-events: none; text-shadow: 0 0 4px var(--panel, #fff); }
+    .ov-ytick-lat { color: var(--lamp-warn); }
+    .ov-bloat { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    #ov-spike-pop { position: fixed; z-index: 90; background: var(--panel); border: 1px solid var(--groove);
+      border-radius: 10px; box-shadow: var(--lift); padding: 8px 10px; min-width: 200px; }
+    #ov-spike-pop .ov-pop-t { font-size: var(--t-2xs); color: var(--muted); margin-bottom: 4px; }
+    #ov-spike-pop .ov-pop-row { display: flex; align-items: center; gap: 7px; padding: 3px 0; font-size: var(--t-sm); }
+    #ov-spike-pop .ov-pop-row .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #ov-spike-pop .ov-pop-row .rates { margin-left: auto; color: var(--ink-2); font-variant-numeric: tabular-nums; flex: none; font-size: var(--t-xs); }
+    .ov-callouts { margin-top: var(--s2); border-top: 1px solid var(--groove); padding-top: var(--s1); }
+    .ov-callout { font-size: var(--t-xs); color: var(--ink-2); padding: 2px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     /* Within this card the arrows match the sparkline palette (Firewalla's
        orange-up / blue-down), not the theme's green upload series. */
     #ov-wan-card .ov-arrow.ul { color: #f59e0b; }
@@ -746,11 +761,12 @@
     }
   </style>
   <script>
-    // Apply the saved theme before first paint to avoid a flash.
-    // Dark (the evening panel) is the default.
+    // Apply the theme before first paint to avoid a flash. An explicit
+    // choice wins; with none saved, follow the OS light/dark preference.
     try {
       const t = localStorage.getItem('openwrtview-theme');
-      document.documentElement.dataset.theme = (t === 'light' || t === 'dark') ? t : 'light';
+      const auto = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.theme = (t === 'light' || t === 'dark') ? t : auto;
     } catch (_) { document.documentElement.dataset.theme = 'light'; }
   </script>
 </head>
@@ -891,9 +907,10 @@
           </div>
           <div id="ov-aps-rows" class="ov-ap-rows"></div>
           <div id="ov-busy" class="ov-busy" style="display:none">
-            <div class="m-lab" style="margin-bottom:4px">Busiest right now <span class="sub">per-device rates · 10 s poll</span></div>
+            <div class="m-lab" style="margin-bottom:4px">Busiest right now <span class="sub">per-device rates · 5 s poll</span></div>
             <div id="ov-busy-rows"></div>
           </div>
+          <div id="ov-callouts" class="ov-callouts" style="display:none"></div>
           <button id="ov-wifi-open" class="link" title="Open the Clients tab">All clients
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
         </section>
@@ -1605,13 +1622,18 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
      * shared scale, no axes. Null samples (shaper-cap blanks) split a
      * trace into segments instead of pulling the area to zero.
      */
-    function drawDualSparkline(svg, down, up, gidD, gidU) {
+    function drawDualSparkline(svg, down, up, gidD, gidU, opts) {
       if (!svg) return;
       const dn = down || [], ul = up || [];
       if (dn.length + ul.length < 4) { svg.innerHTML = ''; return; }
       const W = 100, H = 28, PAD = 2;
-      const max = Math.max(
+      const cap = opts && opts.cap > 0 ? opts.cap : 0;
+      // With a known shaper capacity the scale tops out there (or above a
+      // taller data spike) so heights read in absolute terms and the
+      // dashed capacity line sits at its true level.
+      const dataMax = Math.max(
         ...dn.filter(v => v != null), ...ul.filter(v => v != null), 1e-9);
+      const max = Math.max(dataMax, cap, 1e-9);
       const n = Math.max(dn.length, ul.length) - 1;
       const xy = (v, i) =>
         (PAD + (i / n) * (W - 2 * PAD)).toFixed(1) + ',' +
@@ -1637,6 +1659,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         flush();
         return html;
       };
+      const capY = cap > 0 ? (H - PAD - (cap / max) * (H - 2 * PAD)).toFixed(1) : 0;
       svg.innerHTML =
         '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
           '<defs>' +
@@ -1650,6 +1673,11 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
             '</linearGradient>' +
           '</defs>' +
           series(dn, SPARK_DL, gidD) + series(ul, SPARK_UL, gidU) +
+          (cap > 0
+            ? '<line x1="' + PAD + '" x2="' + (W - PAD) + '" y1="' + capY + '" y2="' + capY +
+              '" stroke="var(--muted,#889)" stroke-width="1" stroke-dasharray="3 3" ' +
+              'vector-effect="non-scaling-stroke" opacity="0.5"/>'
+            : '') +
         '</svg>';
     }
 
@@ -2429,7 +2457,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         loadRadio();
         loadLineHealth();
         if (!tabTimers.overview) tabTimers.overview = [setInterval(pollOverview, 10000), setInterval(loadOvIncidents, 60000),
-          setInterval(loadRadio, 30000)];
+          setInterval(loadRadio, 30000), setInterval(pollBusiest, 5000)];
       } else if (name === 'trends') {
         loadTrendsPanels();
         if (!tabTimers.trends) tabTimers.trends = [setInterval(loadTrendsPanels, 300000)];
@@ -5056,11 +5084,21 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     /** Internet card chart for the selected window. billing shows a 7-day
      *  view, the hour windows (3h/5h/12h/24h) slice the shared 24h payload
      *  by timestamp, 1h and custom windows fetch their own (finer) series. */
+    let ovPeakData = null;   // cache for the 1 s peak ring (per-minute maxima)
+    let ovPeakAt = 0;
+
     async function loadIntChart() {
       try {
         if (intRange === 'custom' && !intCustom) return;
         const key = winKey();
         const ttl = intRange === '1h' ? 60000 : 300000;
+        // The 1 s peak ring backs the peak row; refresh it at most minutely.
+        if (!ovPeakData || Date.now() - ovPeakAt > 60000) {
+          try {
+            ovPeakData = await fetch(appURL('/api/history/wanpeak')).then(r => r.json());
+            ovPeakAt = Date.now();
+          } catch (_) { /* peak row falls back to chart samples */ }
+        }
         let d;
         const cached = intCache[key];
         if (cached && Date.now() - cached.at < ttl) {
@@ -5077,7 +5115,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
             const pairs = (arr || []).map((v, j) => [ovWanData.t[j], v]).filter(p => p[0] >= cutoff);
             return pairs.map(p => p[1]);
           };
-          d = { t: pick(ovWanData.t), wanrx: pick(ovWanData.wanrx), wantx: pick(ovWanData.wantx) };
+          d = { t: pick(ovWanData.t), wanrx: pick(ovWanData.wanrx), wantx: pick(ovWanData.wantx),
+                bloatdn: pick(ovWanData.bloatdn), bloatup: pick(ovWanData.bloatup) };
         } else if (intRange === 'billing') {
           d = await fetch(appURL('/api/history/system?range=7d')).then(r => r.json());
         } else if (intRange === '1h') {
@@ -5134,20 +5173,56 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       }
       cd.innerHTML = '';
       // Firewalla-style two-tone area: blue download, orange upload, one
-      // shared zero-based scale over the charted window.
-      drawDualSparkline(cd, (d.wanrx || []).slice(-n), (d.wantx || []).slice(-n), 'g-ovint-dl', 'g-ovint-ul');
+      // shared zero-based scale over the charted window. When the shaper
+      // capacity is known the scale tops out there and a dashed line marks
+      // it, so a spike's height reads in absolute terms instead of merely
+      // relative to its own window.
+      const dnS = (d.wanrx || []).slice(-n), ulS = (d.wantx || []).slice(-n);
+      const t0 = d.t[0], t1 = d.t[n - 1];
+      const capNow = capD > 0 ? capD / 1.05 : 0;
+      drawDualSparkline(cd, dnS, ulS, 'g-ovint-dl', 'g-ovint-ul', { cap: capNow });
+      const scaleMax = Math.max(
+        ...dnS.filter(v => v != null), ...ulS.filter(v => v != null), capNow, 1e-9);
+      cd.insertAdjacentHTML('beforeend',
+        '<span class="ov-ytick" style="top:0">' + ovYTick(scaleMax) + '</span>' +
+        '<span class="ov-ytick" style="bottom:0">0</span>' +
+        '<span class="ov-ytick ov-ytick-lat" style="bottom:9px;left:2px;right:auto">── latency ms</span>');
+      // Latency under load (bufferbloat probe) as a faint amber line on
+      // its own scale — the "why it felt slow" story behind the bursts.
+      const bloat = (d.bloatdn || []).slice(-n);
+      if (bloat.filter(v => v != null).length > 1) drawBloatOverlay(cd, bloat);
+      // Click a point on the chart to see which devices were talking at
+      // that moment (per-device history, ranked at the clicked minute).
+      cd.onclick = ev => {
+        const r = cd.getBoundingClientRect();
+        const frac = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+        showSpikeWho(ev, t0 + frac * (t1 - t0));
+      };
       // LuCI-style now / average / peak for the charted window, per
-      // direction — derived from the same series the chart draws.
+      // direction — derived from the same series the chart draws, with
+      // the 1 s sampler's per-minute maxima folded into the peak.
       const stats = document.getElementById('ov-int-stats');
       if (stats) {
         const vals = arr => (arr || []).slice(-n).filter(v => v != null && !isNaN(v));
+        // The 1 s peak ring (memory-only, since daemon start) catches
+        // bursts shorter than the history's rate window.
+        const ringMax = dir => {
+          let m = 0;
+          for (const p of (ovPeakData ? ovPeakData.points : []))
+            if (p.t >= t0 - 60 && p.t <= t1 + 60) m = Math.max(m, dir === 'down' ? p.down : p.up);
+          return m;
+        };
         // Grid keeps the ↓ and ↑ rows column-aligned instead of drifting
         // with each number's width.
-        const row = (arrow, cls, a, id) => {
+        const row = (arrow, cls, a, id, truePeak) => {
           if (!a.length) return '';
-          const now = a[a.length - 1], avg = a.reduce((x, v) => x + v, 0) / a.length, peak = Math.max(...a);
+          const now = a[a.length - 1], avg = a.reduce((x, v) => x + v, 0) / a.length;
+          const peak = Math.max(...a), shown = Math.max(peak, truePeak || 0);
           const num = (v, id) => `<span class="num"${id ? ` id="${id}"` : ''} style="text-align:right">${v.toFixed(1)}</span>`;
-          return `<span class="ov-arrow ${cls}">${arrow}</span>` + num(now, id) + num(avg) + num(peak) +
+          const pk = truePeak > peak + 0.05
+            ? `<span class="num" style="text-align:right" title="true 1 s peak from the daemon sampler (history samples are coarser)">${shown.toFixed(1)}*</span>`
+            : `<span class="num" style="text-align:right">${shown.toFixed(1)}</span>`;
+          return `<span class="ov-arrow ${cls}">${arrow}</span>` + num(now, id) + num(avg) + pk +
             '<span class="xs muted">Mbit/s</span>';
         };
         const dl = vals(d.wanrx), ul = vals(d.wantx);
@@ -5156,9 +5231,128 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           const win = intRange === 'billing' ? 'period' : intRange === 'custom' ? 'custom' : intRange.toUpperCase();
           const hdr = ['now', 'avg·' + win, 'peak·' + win].map(l => `<span class="xs muted" style="text-align:right">${l}</span>`).join('');
           stats.innerHTML = '<span></span>' + hdr + '<span></span>' +
-            row('↑', 'ul', ul, 'ov-now-ul') + row('↓', 'dl', dl, 'ov-now-dl');
+            row('↑', 'ul', ul, 'ov-now-ul', ringMax('up')) + row('↓', 'dl', dl, 'ov-now-dl', ringMax('down'));
         } else stats.innerHTML = '';
       }
+    }
+
+    /** Y-axis tick text for the WAN chart scale top, compact Mbit/s/Gbit/s. */
+    function ovYTick(v) {
+      if (v >= 1000) return (v / 1000).toFixed(v >= 10000 ? 0 : 1) + ' G';
+      return Math.round(v) + ' M';
+    }
+
+    /** Latency-under-load overlay: the bufferbloat probe's added latency
+     *  as a faint amber dashed line on its own scale (0..max(ms,10)),
+     *  drawn over the throughput areas — the "why it felt slow" axis. */
+    function drawBloatOverlay(cd, vals) {
+      const W = 100, H = 28, PAD = 2;
+      const n = vals.length - 1;
+      if (n < 1) return;
+      const max = Math.max(...vals.filter(v => v != null), 10);
+      const pts = vals.map((v, i) =>
+        (PAD + (i / n) * (W - 2 * PAD)).toFixed(1) + ',' +
+        (H - PAD - ((v || 0) / max) * (H - 2 * PAD)).toFixed(1)).join(' ');
+      cd.insertAdjacentHTML('beforeend',
+        '<svg class="ov-bloat" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">' +
+        '<polyline points="' + pts + '" fill="none" stroke="var(--lamp-warn)" stroke-width="1" ' +
+        'stroke-dasharray="2 2" vector-effect="non-scaling-stroke" opacity="0.75"/></svg>');
+    }
+
+    // Spike click-through: click the WAN chart and a small popover lists
+    // the devices talking around that moment, ranked by download at the
+    // nearest per-device sample. One cached /api/history/clients fetch
+    // per range; windows beyond per-device history say so honestly.
+    let spikeWhoCache = null;
+
+    async function showSpikeWho(ev, ts) {
+      const age = Date.now() / 1000 - ts;
+      const range = age <= 3600 ? '1h' : age <= 43200 ? '6h' : age <= 172800 ? '24h' : null;
+      if (!range) { ovSpikePop(ev, ts, null); return; }
+      try {
+        if (!spikeWhoCache || spikeWhoCache.range !== range || Date.now() - spikeWhoCache.at > 30000) {
+          const data = await fetch(appURL('/api/history/clients?range=' + range)).then(r => r.json());
+          spikeWhoCache = { range, data, at: Date.now() };
+        }
+        const rows = [];
+        for (const s of (spikeWhoCache.data || [])) {
+          if (!s.t || (!s.rx && !s.tx)) continue;
+          let best = 0, bd = Infinity;
+          for (let i = 0; i < s.t.length; i++) {
+            const d = Math.abs(s.t[i] - ts);
+            if (d < bd) { bd = d; best = i; }
+          }
+          if (bd > 300) continue; // no sample within 5 min of the click
+          rows.push({ name: s.name || s.mac, rx: s.rx[best] || 0, tx: s.tx[best] || 0 });
+        }
+        rows.sort((a, b) => (b.rx + b.tx) - (a.rx + a.tx));
+        ovSpikePop(ev, ts, rows.slice(0, 4));
+      } catch (_) { ovSpikePop(ev, ts, null); }
+    }
+
+    function ovSpikePop(ev, ts, rows) {
+      let pop = document.getElementById('ov-spike-pop');
+      if (pop) pop.remove();
+      if (!rows) return;
+      const when = new Date(ts * 1000).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+      pop = document.createElement('div');
+      pop.id = 'ov-spike-pop';
+      pop.innerHTML = '<div class="ov-pop-t">Talking around ' + h(when) + '</div>' +
+        (rows.length
+          ? rows.map(r =>
+              '<div class="ov-pop-row">' + realIcon(brandIconURL(r.name), devIcon({ name: r.name }, 12), 16) +
+              '<span class="n">' + h(r.name) + '</span>' +
+              '<span class="rates">↓' + fmtBits(r.rx) + ' ↑' + fmtBits(r.tx) + '</span></div>').join('')
+          : '<p class="xs muted">no per-device traffic recorded around then</p>');
+      document.body.appendChild(pop);
+      const r = pop.getBoundingClientRect();
+      pop.style.left = Math.min(ev.clientX + 10, innerWidth - r.width - 8) + 'px';
+      pop.style.top = Math.min(ev.clientY + 10, innerHeight - r.height - 8) + 'px';
+      const close = e2 => {
+        if (pop && !pop.contains(e2.target)) {
+          pop.remove();
+          pop = null;
+          document.removeEventListener('click', close, true);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', close, true), 0);
+    }
+
+    /** Daily activity callouts (Network card): the day's peak minute from
+     *  the 1 s ring, today's top talker from the usage store, and — when
+     *  one exists — the newest warning-level event, as one-line stories. */
+    function renderCallouts() {
+      const el = document.getElementById('ov-callouts');
+      if (!el) return;
+      const rows = [];
+      if (ovPeakData && ovPeakData.points) {
+        let pk = null;
+        for (const p of ovPeakData.points)
+          if (Date.now() / 1000 - p.t <= 86400 && (!pk || p.down > pk.down)) pk = p;
+        if (pk && pk.down > 1) {
+          rows.push('Peak <b class="num">' + pk.down.toFixed(0) + ' Mbit/s</b> at ' +
+            new Date(pk.t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        }
+      }
+      const days = (ovUsageCache && ovUsageCache.days) || [];
+      const today = days.length ? days.reduce((a, b) => String(a.date) > String(b.date) ? a : b) : null;
+      if (today && today.clients) {
+        let top = null;
+        for (const [mac, u] of Object.entries(today.clients)) {
+          const gb = (u.rx_gb || 0) + (u.tx_gb || 0);
+          if (!top || gb > top.gb) top = { mac, gb };
+        }
+        if (top && top.gb >= 0.5) {
+          const name = (ovClients.find(c => (c.mac || '').toLowerCase() === top.mac.toLowerCase()) || {}).name || top.mac;
+          rows.push('Top talker today: <b>' + h(name) + '</b> · ' + fmtGB(top.gb));
+        }
+      }
+      const warn = ovEvents.find(e => (e.sev === 'warn' || e.sev === 'crit') && Date.now() / 1000 - e.at <= 86400);
+      if (warn) rows.push('<span class="' + (warn.sev === 'crit' ? 'crit' : 'warn') + '">' + h(warn.msg) + '</span>');
+      el.innerHTML = rows.length
+        ? rows.map(r => '<div class="ov-callout">' + r + '</div>').join('')
+        : '';
+      el.style.display = rows.length ? '' : 'none';
     }
 
     function ovGauge(label, fmt, frac, state, series, gid) {
@@ -5862,6 +6056,22 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       el.classList.remove('hidden');
     }
 
+    // Busiest-right-now refreshes on its own 5 s cadence so the rows track
+    // the WAN hero (5 s rolling avg) instead of lagging the 10 s overview
+    // poll by up to two bursts. Cheap: one /api/clients fetch.
+    let pollBusyAt = 0;
+    async function pollBusiest() {
+      if (activeTab !== 'overview' || Date.now() - pollBusyAt < 4000) return;
+      pollBusyAt = Date.now();
+      try {
+        const cl = await fetch(appURL('/api/clients')).then(r => r.json());
+        ovClients = Array.isArray(cl) ? cl : ovClients;
+        clientsCache = ovClients;
+        renderBusiest(ovClients);
+        document.getElementById('ov-clients').textContent = ovClients.filter(c => c.online).length;
+      } catch (_) { /* next tick retries */ }
+    }
+
     async function pollOverview() {
       try {
         const jobs = [
@@ -5890,6 +6100,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         renderPlanBar();
         renderTopClients(ovClients);
         renderBusiest(ovClients);
+        renderCallouts();
         renderEvents(ovEvents);
         if (Array.isArray(evs)) { lampEvents = evs; lampEventsAt = Date.now(); renderLamps(); }
         renderTopology(); // Clients node uses the live online count

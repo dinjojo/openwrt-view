@@ -4,7 +4,7 @@ import "testing"
 
 func TestRateWindow(t *testing.T) {
 	cases := map[string]string{
-		"15s":   "20s",  // clamped: 10 s scrapes need >= 2 samples
+		"15s":   "20s", // clamped: 10 s scrapes need >= 2 samples
 		"30s":   "30s",
 		"45s":   "45s",
 		"120s":  "120s",
