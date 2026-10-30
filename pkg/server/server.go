@@ -166,7 +166,7 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	if s.alerts.Enabled() {
 		s.events.SetHook(func(kind, sev, msg string) { s.alerts.Notify(kind, sev, msg) })
 	}
-	s.events.Add("monitor", "info", "Monitor restarted ("+s.version+") — watching WAN, WARP and Cake")
+	s.events.Add("monitor", "info", "Monitor restarted ("+s.version+")")
 	if s.orbi.Enabled() {
 		s.orbi.SetEventHook(s.events.Add)
 		s.orbi.SetNameResolver(s.clientStore.Name)

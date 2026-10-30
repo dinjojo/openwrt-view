@@ -152,7 +152,10 @@
     .side-ev.warn .dot { background: #f59e0b; }
     .side-ev.crit .dot { background: #ef4444; }
     .side-ev .t { flex: none; color: var(--muted, #889); font-variant-numeric: tabular-nums; }
-    .side-ev .m { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Up to three wrapped lines per event: the full message stays
+       readable where one nowrap line would ellipsize most of it away. */
+    .side-ev .m { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+      overflow: hidden; }
     .side-ev-none { font-size: var(--t-2xs); color: var(--muted, #889); padding: 0 12px; }
     .tab-btn { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 9px;
       color: var(--ink-2); font-weight: 550; font-size: var(--t-sm); text-align: left; white-space: nowrap; }
