@@ -231,8 +231,12 @@
     .ov-grid { display: grid; gap: var(--s5); }
     .ov-g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .ov-g2 { grid-template-columns: 3fr 2fr; }
-    /* A grid column holding two stacked cards (Wi-Fi band split + System health). */
+    /* A grid column holding two stacked cards (Wi-Fi band split + System health).
+       Both cards grow so the column fills its grid row — the left column is
+       much taller (Network + Usage + Top clients) and the old fixed-height
+       cards left a dead gap below System health. */
     .ov-col { display: flex; flex-direction: column; gap: var(--s5); min-width: 0; }
+    .ov-col > .ov-card { flex: 1; }
     /* System health rows: single column in the narrow stacked card — the
        old two-up grid clipped the status lamp at a third of the row. */
     .ov-col .ov-sh-rows { grid-template-columns: 1fr; }
@@ -468,6 +472,12 @@
 
     @media (max-width: 1279px) {
       .ov-g3 { grid-template-columns: 1fr 1fr; }
+      /* Top clients wraps to a second row here; the stacked column
+         (Wi-Fi split + System health) spans both rows so no hole opens
+         beside it. Row 1's Network card instead goes full-width under
+         WAN + Gateway — same no-holes rule, different resolution. */
+      .ov-g3 > .ov-col { grid-row: span 2; }
+      .ov-g-row1 > .sect:last-child { grid-column: 1 / -1; }
     }
     @media (max-width: 767px) {
       .ov-grid { grid-template-columns: 1fr; }
@@ -479,7 +489,8 @@
       .topo-ic svg { width: 31px; height: 31px; }
       .ov-top-row .nm { flex-basis: 6rem; }
     }
-    html:not([data-theme="dark"]) .ov-grid > .sect { margin-bottom: 0; }
+    html:not([data-theme="dark"]) .ov-grid > .sect,
+    html:not([data-theme="dark"]) .ov-col > .sect { margin-bottom: 0; }
 
     /* ── Lamp: incandescent indicator, state always paired with text ──── */
     .lamp { --c: var(--lamp-off); display: inline-block; width: 10px; height: 10px; border-radius: 50%;
@@ -910,7 +921,7 @@
       </div>
 
       <!-- Row 1: Internet · Gateway · Network -->
-      <div class="ov-grid ov-g3">
+      <div class="ov-grid ov-g3 ov-g-row1">
         <section class="sect ov-card" id="ov-wan-card">
           <div class="ov-card-cap"><span class="ov-cap-t">WAN Throughput</span><span class="ov-cap-sub">live · 5 s rolling avg</span></div>
           <div class="ov-wan-live">
@@ -1014,16 +1025,7 @@
         </section>
       </div>
 
-      <!-- Row 3: Events (full width) -->
-      <div class="ov-grid">
-        <section class="sect ov-card">
-          <div class="ov-card-cap"><span class="ov-cap-t">Events</span><button id="ov-events-all" class="link" title="Open the System tab">See all
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button></div>
-          <div id="ov-events" class="rows scrollbox"></div>
-        </section>
-      </div>
-
-      <!-- Row 4: Line health · Checks -->
+      <!-- Row 3: Line health · Checks -->
       <div class="ov-grid ov-g2">
       <!-- Line health: WAN latency over the chosen window -->
       <section class="sect" id="ov-lh-sect">
@@ -4761,13 +4763,12 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       return { down: p.down, up: p.up };
     }
 
-    /** Fetch per-client totals for the window, then repaint the donut,
-     *  top clients and events. No-op in billing mode (daily files cover it). */
+    /** Fetch per-client totals for the window, then repaint the donut and
+     *  top clients. No-op in billing mode (daily files cover it). */
     async function loadWinUsage() {
       if (!winActive()) {
         renderUsageDonut();
         renderTopClients(ovClients);
-        renderEvents(ovEvents);
         return;
       }
       if (intRange === 'custom' && !intCustom) return;
@@ -4788,7 +4789,6 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       } catch (e) { console.error('[win-usage]', e); }
       renderUsageDonut();
       renderTopClients(ovClients);
-      renderEvents(ovEvents);
     }
 
     /** Re-render every window-driven panel. Called on pill clicks and
@@ -5961,54 +5961,6 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       });
     }
 
-    function renderEvents(list) {
-      const el = document.getElementById('ov-events');
-      // A selected window narrows the feed to what happened inside it.
-      if (winActive()) {
-        const from = RANGE_SECS[intRange] ? Date.now() / 1000 - RANGE_SECS[intRange]
-          : intCustom ? intCustom.from : 0;
-        const to = intRange === 'custom' && intCustom ? intCustom.to : Infinity;
-        list = list.filter(ev => ev.at >= from && ev.at <= to);
-      }
-      const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-      el.innerHTML = list.map(ev => {
-        const d = new Date(ev.at * 1000);
-        const today = new Date().toDateString() === d.toDateString();
-        const when = today
-          ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          : (dayNames[d.getDay()] + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-        // Kind gets its own tinted glyph chip (severity overrides the
-        // tint — warn amber, crit red); "satellite" keeps the router
-        // glyph — muted on a recovery, severity-tinted when a unit
-        // dropped off. Unknown kinds fall back to the severity lamp.
-        const sevState = ev.sev === 'ok' || ev.sev === 'warn' || ev.sev === 'crit' ? ev.sev : 'info';
-        const sevColor = { warn: '#f59e0b', crit: '#ef4444' }[ev.sev] || null;
-        const EV_KIND_META = {
-          wan:     { i: 'globe',  c: '#0069ff' },
-          monitor: { i: 'pulse',  c: '#64748b' },
-          config:  { i: 'gear',   c: '#94a3b8' },
-          reboot:  { i: 'power',  c: '#f59e0b' },
-          probe:   { i: 'zap',    c: '#8b5cf6' },
-          warp:    { i: 'shield', c: '#7c3aed' },
-          dns:     { i: 'server', c: '#14b8a6' },
-          wifi:    { i: 'wifi',   c: '#16a34a' },
-        };
-        const evMeta = EV_KIND_META[ev.kind];
-        const mark = ev.kind === 'satellite'
-          ? '<span class="mk ' + (ev.sev === 'warn' || ev.sev === 'crit' ? sevState : '') + '">' +
-              ICON_ROUTER.replace('width="15" height="15"', 'width="12" height="12"') + '</span>'
-          : evMeta
-          ? '<span class="mk">' + tintIcon(evMeta.i, sevColor || evMeta.c, 20) + '</span>'
-          : '<span class="mk">' + lamp(sevState, 'sm') + '</span>';
-        return '<div class="ev">' + mark +
-          '<span class="when">' + when + '</span>' +
-          '<span>' + h(humanizeMACs(ev.msg)) +
-            (ev.count > 1 ? ' <span class="num xs muted nowrap">&times;' + ev.count + '</span>' : '') +
-          '</span>' +
-        '</div>';
-      }).join('') || '<p class="lrow sm muted">nothing notable yet — quiet is good</p>';
-    }
-
     // Sidebar events feed: the empty stretch under the nav shows the
     // latest few events on every tab. Its own 30 s poll keeps it live
     // off the Overview cadence too; clicking jumps to the full panel.
@@ -6029,13 +5981,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       }).join('') || '<p class="side-ev-none">quiet — nothing notable</p>';
     }
     document.getElementById('side-events').addEventListener('click', () => {
+      // The sidebar is the events surface now; a click just brings the
+      // Overview up (its callouts and lamps still carry event context).
       document.querySelector('.tab-btn[data-tab="overview"]').click();
-      // The overview re-renders on tab switch; give it a beat, then
-      // bring the full Events panel into view.
-      setTimeout(() => {
-        const el = document.getElementById('ov-events');
-        if (el) el.closest('section, .ov-card, div[class*="card"]').scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }, 400);
     });
     (async function pollSideEvents() {
       try {
@@ -6270,7 +6218,6 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         renderTopClients(ovClients);
         renderBusiest(ovClients);
         renderCallouts();
-        renderEvents(ovEvents);
         renderSideEvents();
         if (Array.isArray(evs)) { lampEvents = evs; lampEventsAt = Date.now(); renderLamps(); }
         renderTopology(); // Clients node uses the live online count
@@ -6339,7 +6286,6 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
     document.getElementById('ov-internet').addEventListener('click', () => setTab('diag'));
     document.getElementById('ov-wifi-open').addEventListener('click', () => setTab('clients'));
     document.getElementById('ov-gateway').addEventListener('click', () => setTab('system'));
-    document.getElementById('ov-events-all').addEventListener('click', () => setTab('system'));
     // Global dashboard window: presets refetch every panel, Custom reveals
     // from/to and applies on Apply.
     document.addEventListener('click', e => {
