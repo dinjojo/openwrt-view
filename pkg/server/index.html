@@ -6121,7 +6121,9 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       const over = pace > plan.cap_gb;
       el.innerHTML =
         '<div class="ov-plan-head">' +
-          '<span><b>' + fmt(used) + '</b> of ' + plan.cap_gb + ' GB plan</span>' +
+          // Scoped in words: the card's window pill ("Last 3 hours") governs
+          // the donut below, never this bar — say so before the number reads.
+          '<span>this billing month: <b>' + fmt(used) + '</b> of ' + plan.cap_gb + ' GB plan</span>' +
           '<span>resets on day ' + resetDay + ' · projected <span class="num"' + (over ? ' style="color:#ef4444"' : '') + '>' + fmt(pace) + '</span></span>' +
         '</div>' +
         '<div class="ov-plan-bar"><i class="' + (over ? 'hot' : '') + '" style="width:' + pct.toFixed(1) + '%"></i></div>';
