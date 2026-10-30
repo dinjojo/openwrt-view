@@ -332,7 +332,10 @@
     #ov-int-chart svg { width: 100%; height: 88px; display: block; margin-top: var(--s2); }
     /* WAN chart axes: capacity-scale ticks over the sparkline, the
        bufferbloat overlay line, and the spike click-through cursor. */
-    #ov-int-chart { position: relative; cursor: crosshair; }
+    #ov-int-chart { position: relative; cursor: crosshair; padding-bottom: 14px; }
+    .ov-xtick { position: absolute; top: 90px; z-index: 1; font-size: 9px; line-height: 1.1;
+      color: var(--muted); pointer-events: none; text-shadow: 0 0 4px var(--panel, #fff);
+      font-variant-numeric: tabular-nums; }
     .ov-ytick { position: absolute; right: 2px; z-index: 1; font-size: 9px; line-height: 1.1;
       color: var(--muted); pointer-events: none; text-shadow: 0 0 4px var(--panel, #fff); }
     .ov-ytick-lat { color: var(--lamp-warn); }
@@ -452,7 +455,7 @@
        of the card blank. */
     .ov-top-rows { display: flex; flex-direction: column; flex: 1; justify-content: space-evenly; min-height: 14rem; }
     section.ov-card:has(.ov-top-rows) { display: flex; flex-direction: column; }
-    .ov-top-rows .ov-top-row { padding: 14px 6px; }
+    .ov-top-rows .ov-top-row { padding: 9px 6px; }
     .ov-top-row { display: flex; align-items: center; gap: 10px; padding: 8px 6px; width: 100%; text-align: left;
       border-radius: 6px; font-size: var(--t-sm); }
     .ov-top-row:hover { background: var(--well); }
@@ -5318,7 +5321,24 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         ...dnS.filter(v => v != null), ...ulS.filter(v => v != null), capNow, 1e-9);
       cd.insertAdjacentHTML('beforeend',
         '<span class="ov-ytick" style="top:0">' + ovYTick(scaleMax) + '</span>' +
-        '<span class="ov-ytick" style="bottom:0">0</span>');
+        '<span class="ov-ytick" style="bottom:14px">0</span>');
+      // X-axis: window start / midpoint / end. The right tick is the drawn
+      // window's last sample — the live tail rides one step past it, so it
+      // reads as "now" without claiming a fresher stamp than the data.
+      // Multi-day windows (billing, long custom) prefix the day name.
+      if (tEnd > t0) {
+        const ovXTime = t => {
+          const d = new Date(t * 1000);
+          const tm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          if (tEnd - t0 <= 86400 && d.toDateString() === new Date().toDateString()) return tm;
+          return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()] + ' ' + tm;
+        };
+        const midT = (t0 + tEnd) / 2;
+        cd.insertAdjacentHTML('beforeend',
+          '<span class="ov-xtick" style="left:0">' + ovXTime(t0) + '</span>' +
+          '<span class="ov-xtick" style="left:50%;transform:translateX(-50%)">' + ovXTime(midT) + '</span>' +
+          '<span class="ov-xtick" style="right:0">' + ovXTime(tEnd) + '</span>');
+      }
       // True 1 s peaks as a faint dotted envelope, per direction. History
       // samples average over their step (30 s in the 3H window), which
       // dilutes short bursts — a 400 Mbit/s speedtest reads ~126 in the
@@ -5338,7 +5358,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         if (envSvg) cd.insertAdjacentHTML('beforeend',
           '<svg class="ov-bloat" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">' +
           envSvg + '</svg>' +
-          '<span class="ov-ytick ov-ytick-lat" style="bottom:21px;left:2px;right:auto">··· 1 s peaks</span>');
+          '<span class="ov-ytick ov-ytick-lat" style="bottom:35px;left:2px;right:auto">··· 1 s peaks</span>');
       }
       // Latency under load (bufferbloat probe) as a faint amber line on
       // its own scale — the "why it felt slow" story behind the bursts.
@@ -5355,7 +5375,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           ? '── latency +0 ms'
           : `── latency pk ${fmtMs(pkMs)} ms`;
         cd.insertAdjacentHTML('beforeend',
-          `<span class="ov-ytick ov-ytick-lat" style="bottom:9px;left:2px;right:auto" ` +
+          `<span class="ov-ytick ov-ytick-lat" style="bottom:23px;left:2px;right:auto" ` +
           `title="Added latency under load (bufferbloat probe), its own ms scale. A line hugging zero means transfers add no delay; spikes during bursts are the queuing delay that makes things feel slow.">` +
           lab + `</span>`);
       }
@@ -5913,7 +5933,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         return [(c.rx_total || 0) / 1024 ** 3, (c.tx_total || 0) / 1024 ** 3];
       };
       const valOf = p => tcDir === 'down' ? p[0] : tcDir === 'up' ? p[1] : p[0] + p[1];
-      const top = online.slice().sort((a, b) => valOf(pairOf(b)) - valOf(pairOf(a))).slice(0, 5);
+      const top = online.slice().sort((a, b) => valOf(pairOf(b)) - valOf(pairOf(a))).slice(0, 8);
       // A rotated randomized MAC makes one logical device appear twice
       // (same DHCP hostname, two MACs). Merge duplicates by resolved name
       // so the card shows the device once with summed usage.
