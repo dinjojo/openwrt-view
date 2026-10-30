@@ -206,6 +206,11 @@
     .ov-grid { display: grid; gap: var(--s5); }
     .ov-g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .ov-g2 { grid-template-columns: 3fr 2fr; }
+    /* A grid column holding two stacked cards (Wi-Fi band split + System health). */
+    .ov-col { display: flex; flex-direction: column; gap: var(--s5); min-width: 0; }
+    /* System health rows: single column in the narrow stacked card — the
+       old two-up grid clipped the status lamp at a third of the row. */
+    .ov-col .ov-sh-rows { grid-template-columns: 1fr; }
     .ov-card-cap { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3);
       margin-bottom: var(--s3); }
     .ov-cap-t { font-size: var(--t-xs); font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--ink); }
@@ -945,12 +950,19 @@
           <p class="xs muted" style="margin-top:6px">Counters include Ethernet/PPPoE/IP headers — expect a few percent of divergence from your ISP&rsquo;s meter. The ISP&rsquo;s number is the standard.</p>
         </section>
 
-        <section class="sect ov-card">
-          <div class="ov-card-cap"><span class="ov-cap-t">Wi-Fi band split</span></div>
-          <div id="ov-bandbar" class="ov-bandbar" aria-hidden="true"></div>
-          <div id="ov-bandrows" class="ov-band-rows"></div>
-          <div id="ov-wifi-line" class="sm muted ov-foot">Wi-Fi — waiting for AP data…</div>
-        </section>
+        <div class="ov-col">
+          <section class="sect ov-card">
+            <div class="ov-card-cap"><span class="ov-cap-t">Wi-Fi band split</span></div>
+            <div id="ov-bandbar" class="ov-bandbar" aria-hidden="true"></div>
+            <div id="ov-bandrows" class="ov-band-rows"></div>
+            <div id="ov-wifi-line" class="sm muted ov-foot">Wi-Fi — waiting for AP data…</div>
+          </section>
+
+          <section class="sect ov-card">
+            <div class="ov-card-cap"><span class="ov-cap-t">System health</span><span id="ov-sh-state" class="ov-cap-state" data-state="ok">All services operational</span></div>
+            <div id="ov-syshealth" class="ov-sh-rows"></div>
+          </section>
+        </div>
 
         <section class="sect ov-card">
           <div class="ov-card-cap"><span class="ov-cap-t">Top clients</span><span class="ov-cap-sub" id="ov-top-sub">This billing period</span>
@@ -966,19 +978,17 @@
         </section>
       </div>
 
-      <!-- Row 3: Events · System health -->
-      <div class="ov-grid ov-g2">
+      <!-- Row 3: Events (full width) -->
+      <div class="ov-grid">
         <section class="sect ov-card">
           <div class="ov-card-cap"><span class="ov-cap-t">Events</span><button id="ov-events-all" class="link" title="Open the System tab">See all
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button></div>
           <div id="ov-events" class="rows scrollbox"></div>
         </section>
+      </div>
 
-        <section class="sect ov-card">
-          <div class="ov-card-cap"><span class="ov-cap-t">System health</span><span id="ov-sh-state" class="ov-cap-state" data-state="ok">All services operational</span></div>
-          <div id="ov-syshealth" class="ov-sh-rows"></div>
-        </section>
-
+      <!-- Row 4: Line health · Checks -->
+      <div class="ov-grid ov-g2">
       <!-- Line health: WAN latency over the chosen window -->
       <section class="sect" id="ov-lh-sect">
         <div class="sect-head">
@@ -1010,6 +1020,7 @@
         <div id="ov-radio-bands" class="meters"></div>
         <div id="ov-radio-nb" class="hidden mt4"></div>
       </section>
+      </div>
     </section>
 
     <!-- ═══ Tab: Trends ══════════════════════════════════════════════════ -->
