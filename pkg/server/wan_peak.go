@@ -24,6 +24,7 @@ type wanPeakPoint struct {
 	T    int64   `json:"t"`    // unix seconds, floored to the minute
 	Down float64 `json:"down"` // Mbit/s, worst 1 s download in the minute
 	Up   float64 `json:"up"`   // Mbit/s, worst 1 s upload
+	Who  string  `json:"who,omitempty"` // device driving the peak, per the client store's rates
 }
 
 type wanPeakRing struct {
@@ -98,12 +99,19 @@ func (r *wanPeakRing) flushLocked() {
 
 // sample folds one 1-second reading into the open minute bucket,
 // rolling the previous minute into the ring when the minute turns.
-func (r *wanPeakRing) sample(down, up float64, now time.Time) {
+// whoDown / whoUp name the device whose rates were highest that second
+// (empty when the client store has nothing); the peak keeps whoever was
+// driving the larger direction at the moment of the max.
+func (r *wanPeakRing) sample(down, up float64, now time.Time, whoDown, whoUp string) {
 	minute := now.Unix() / 60 * 60
+	who := whoUp
+	if down >= up {
+		who = whoDown
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.cur.T == 0 {
-		r.cur = wanPeakPoint{T: minute, Down: down, Up: up}
+		r.cur = wanPeakPoint{T: minute, Down: down, Up: up, Who: who}
 		return
 	}
 	if minute != r.cur.T {
@@ -113,14 +121,22 @@ func (r *wanPeakRing) sample(down, up float64, now time.Time) {
 			r.points = r.points[:wanPeakCap]
 		}
 		r.flushLocked()
-		r.cur = wanPeakPoint{T: minute, Down: down, Up: up}
+		r.cur = wanPeakPoint{T: minute, Down: down, Up: up, Who: who}
 		return
 	}
 	if down > r.cur.Down {
 		r.cur.Down = down
+		// Attribute only at a new bucket max: a later, smaller second
+		// must not steal the credit from the second that set the peak.
+		if down >= r.cur.Up {
+			r.cur.Who = whoDown
+		}
 	}
 	if up > r.cur.Up {
 		r.cur.Up = up
+		if up > r.cur.Down {
+			r.cur.Who = whoUp
+		}
 	}
 }
 

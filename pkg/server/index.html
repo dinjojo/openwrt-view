@@ -316,6 +316,7 @@
     #ov-spike-pop .ov-pop-row .rates { margin-left: auto; color: var(--ink-2); font-variant-numeric: tabular-nums; flex: none; font-size: var(--t-xs); }
     .ov-callouts { margin-top: var(--s2); border-top: 1px solid var(--groove); padding-top: var(--s1); }
     .ov-callout { font-size: var(--t-xs); color: var(--ink-2); padding: 2px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ov-callout .sub { font-size: var(--t-2xs); color: var(--ink-2); }
     /* Within this card the arrows match the sparkline palette (Firewalla's
        orange-up / blue-down), not the theme's green upload series. */
     #ov-wan-card .ov-arrow.ul { color: #f59e0b; }
@@ -5428,7 +5429,10 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         if (pk && rate > 1) {
           rows.push('WAN peak <b class="num">' + rate.toFixed(0) + ' Mbit/s' +
             (up ? ' <span class="sub">up</span>' : '') + '</b> at ' +
-            new Date(pk.t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+            new Date(pk.t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
+            // Device last, in the small style: the row is nowrap+ellipsis,
+            // and on a narrow card the name is the right thing to lose first.
+            (pk.who ? ' · <span class="sub">' + h(pk.who) + '</span>' : ''));
         }
       }
       const days = (ovUsageCache && ovUsageCache.days) || [];

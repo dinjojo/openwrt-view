@@ -306,7 +306,20 @@ func (s *Server) forcePoll() {
 			up += i.TxBytesPerS
 		}
 	}
-	s.wanPeaks.sample(down*8/1e6, up*8/1e6, time.Now())
+	// Name the device driving each direction, from the same per-device
+	// rates the Busiest-right-now rows read — so a peak minute can say
+	// whose speedtest it was. Empty while the client store has nothing.
+	var whoDown, whoUp string
+	var rxMax, txMax float64
+	for _, c := range s.clientStore.Snapshot() {
+		if c.RxRate > rxMax {
+			rxMax, whoDown = c.RxRate, c.Name
+		}
+		if c.TxRate > txMax {
+			txMax, whoUp = c.TxRate, c.Name
+		}
+	}
+	s.wanPeaks.sample(down*8/1e6, up*8/1e6, time.Now(), whoDown, whoUp)
 	s.statsMu.Lock()
 	s.stats = stats
 	s.statsMu.Unlock()
