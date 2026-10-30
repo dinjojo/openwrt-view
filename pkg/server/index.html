@@ -137,6 +137,23 @@
     .side-logo { width: 34px; height: 34px; border-radius: 9px; background: var(--accent); color: #fff;
       display: inline-flex; align-items: center; justify-content: center; flex: none; }
     .side-nav { display: flex; flex-direction: column; gap: 2px; }
+    /* The empty stretch under the nav shows the latest few events, live
+       on every tab; a click jumps to the Overview's full Events panel. */
+    .side-events { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
+      gap: 4px; margin-top: var(--s4); }
+    .side-ev-title { font-size: var(--t-2xs); font-weight: 600; text-transform: uppercase;
+      letter-spacing: .06em; color: var(--ink-2); padding: 0 12px; }
+    .side-ev { display: flex; align-items: baseline; gap: 8px; padding: 4px 12px; border: 0;
+      background: none; border-radius: 8px; font: inherit; font-size: var(--t-2xs);
+      color: var(--ink-2); text-align: left; width: 100%; cursor: pointer; }
+    .side-ev:hover { background: var(--hover, rgba(127,127,127,.12)); }
+    .side-ev .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted, #94a3b8);
+      flex: none; align-self: center; }
+    .side-ev.warn .dot { background: #f59e0b; }
+    .side-ev.crit .dot { background: #ef4444; }
+    .side-ev .t { flex: none; color: var(--muted, #889); font-variant-numeric: tabular-nums; }
+    .side-ev .m { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .side-ev-none { font-size: var(--t-2xs); color: var(--muted, #889); padding: 0 12px; }
     .tab-btn { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 9px;
       color: var(--ink-2); font-weight: 550; font-size: var(--t-sm); text-align: left; white-space: nowrap; }
     .tab-btn:hover { color: var(--ink); background: var(--well); }
@@ -743,6 +760,7 @@
       .side-brand { padding: 0; }
       .side-nav { flex-direction: row; overflow-x: auto; flex: 1; gap: var(--s2); }
       .side-foot { margin: 0; border: 0; padding: 0; flex-direction: row; }
+      .side-events { display: none; }
       .side-act { padding: 8px; }
       .main-col { padding: 0 var(--s4) var(--s4); }
       .top { padding: var(--s3) 0; }
@@ -810,6 +828,10 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></svg>
         <span>System</span></button>
     </nav>
+    <div class="side-events" id="side-events" role="region" aria-label="Recent events">
+      <div class="side-ev-title">Events</div>
+      <div id="side-ev-list"></div>
+    </div>
     <div class="side-foot">
       <button id="refresh-btn" class="side-act" aria-label="Refresh this tab now" title="Refresh this tab now">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>
@@ -5979,6 +6001,42 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       }).join('') || '<p class="lrow sm muted">nothing notable yet — quiet is good</p>';
     }
 
+    // Sidebar events feed: the empty stretch under the nav shows the
+    // latest few events on every tab. Its own 30 s poll keeps it live
+    // off the Overview cadence too; clicking jumps to the full panel.
+    function renderSideEvents() {
+      const el = document.getElementById('side-ev-list');
+      if (!el) return;
+      const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+      el.innerHTML = ovEvents.slice(0, 8).map(ev => {
+        const d = new Date(ev.at * 1000);
+        const today = new Date().toDateString() === d.toDateString();
+        const when = today
+          ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : (dayNames[d.getDay()] + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        return '<button class="side-ev ' + (ev.sev === 'warn' || ev.sev === 'crit' ? ev.sev : '') + '">' +
+          '<span class="dot" aria-hidden="true"></span>' +
+          '<span class="t">' + when + '</span>' +
+          '<span class="m">' + h(humanizeMACs(ev.msg)) + '</span></button>';
+      }).join('') || '<p class="side-ev-none">quiet — nothing notable</p>';
+    }
+    document.getElementById('side-events').addEventListener('click', () => {
+      document.querySelector('.tab-btn[data-tab="overview"]').click();
+      // The overview re-renders on tab switch; give it a beat, then
+      // bring the full Events panel into view.
+      setTimeout(() => {
+        const el = document.getElementById('ov-events');
+        if (el) el.closest('section, .ov-card, div[class*="card"]').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 400);
+    });
+    (async function pollSideEvents() {
+      try {
+        const evs = await fetch(appURL('/api/events')).then(r => r.json());
+        if (Array.isArray(evs)) { ovEvents = evs; renderSideEvents(); }
+      } catch (_) { /* the next tick retries; the sidebar can wait */ }
+      setTimeout(pollSideEvents, 30000);
+    })();
+
     // ── Data usage: daily / monthly bars with drill-down ─────────────────
     // Firewalla's Data Usage screen in miniature: one bar per day (or
     // month), the grain toggled in the card head, a month click drills
@@ -6205,6 +6263,7 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
         renderBusiest(ovClients);
         renderCallouts();
         renderEvents(ovEvents);
+        renderSideEvents();
         if (Array.isArray(evs)) { lampEvents = evs; lampEventsAt = Date.now(); renderLamps(); }
         renderTopology(); // Clients node uses the live online count
         renderOverview();
