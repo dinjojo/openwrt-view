@@ -417,7 +417,12 @@
     .ov-band-row .meta { margin-left: auto; color: var(--ink-2); font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
 
     /* Top clients */
-    .ov-top-rows { display: flex; flex-direction: column; }
+    /* Rows spread over the card's height: the grid stretches this card to
+       match its taller neighbours, and a top-packed list left the rest
+       of the card blank. */
+    .ov-top-rows { display: flex; flex-direction: column; flex: 1; justify-content: space-evenly; min-height: 14rem; }
+    section.ov-card:has(.ov-top-rows) { display: flex; flex-direction: column; }
+    .ov-top-rows .ov-top-row { padding: 14px 6px; }
     .ov-top-row { display: flex; align-items: center; gap: 10px; padding: 8px 6px; width: 100%; text-align: left;
       border-radius: 6px; font-size: var(--t-sm); }
     .ov-top-row:hover { background: var(--well); }
@@ -5409,11 +5414,20 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
       if (!el) return;
       const rows = [];
       if (ovPeakData && ovPeakData.points) {
-        let pk = null;
-        for (const p of ovPeakData.points)
-          if (Date.now() / 1000 - p.t <= 86400 && (!pk || p.down > pk.down)) pk = p;
-        if (pk && pk.down > 1) {
-          rows.push('Peak <b class="num">' + pk.down.toFixed(0) + ' Mbit/s</b> at ' +
+        // True peak in either direction — a 400 Mbit/s upload is as real
+        // as a download, so the row would be wrong to only scan down.
+        let pk = null, up = false;
+        for (const p of ovPeakData.points) {
+          if (Date.now() / 1000 - p.t > 86400) continue;
+          if (!pk || Math.max(p.down, p.up) > Math.max(pk.down, pk.up)) {
+            pk = p;
+            up = p.up > p.down;
+          }
+        }
+        const rate = pk ? Math.max(pk.down, pk.up) : 0;
+        if (pk && rate > 1) {
+          rows.push('WAN peak <b class="num">' + rate.toFixed(0) + ' Mbit/s' +
+            (up ? ' <span class="sub">up</span>' : '') + '</b> at ' +
             new Date(pk.t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
         }
       }

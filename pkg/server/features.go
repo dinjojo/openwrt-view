@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +42,14 @@ func (s *Server) SetLocation(loc *time.Location) {
 // SetUsageStore registers where per-client daily usage is persisted (nil
 // disables). Call before Run.
 func (s *Server) SetUsageStore(u *usage.Store) { s.usage = u }
+
+// SetWanPeakPath persists the 1 s WAN peak ring across restarts as a
+// JSON file under dir. Call before Run. An error means the old peaks
+// could not be read (unwritable dir, corrupt file) and the ring starts
+// fresh; sampling and flushing continue regardless.
+func (s *Server) SetWanPeakPath(dir string) error {
+	return s.wanPeaks.setPath(filepath.Join(dir, "wan-peaks.json"))
+}
 
 // SetDataPlan records the household's monthly data allowance so /api/usage
 // can tell the UI to render the plan bar against the right billing period.

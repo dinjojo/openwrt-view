@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/json"
+	"os"
 	"sync"
 	"time"
 )
@@ -12,8 +14,11 @@ import (
 // down several-fold; this ring answers "how fast did it actually get" —
 // the same 1 s deltas the live cards show, kept as one max per minute.
 //
-// One point per minute caps the ring at 1440 points per day. State is
-// memory-only: a router restart starts a fresh ring.
+// One point per minute caps the ring at 1440 points per day. When a
+// path is set the closed minutes are flushed to it on every minute
+// roll — one small atomic write per minute — and loaded back on boot,
+// so daemon restarts (upgrades, router reboots) no longer forget the
+// day's true peaks.
 
 type wanPeakPoint struct {
 	T    int64   `json:"t"`    // unix seconds, floored to the minute
@@ -23,6 +28,7 @@ type wanPeakPoint struct {
 
 type wanPeakRing struct {
 	mu     sync.Mutex
+	path   string // JSON persistence file; empty = memory-only
 	points []wanPeakPoint
 	cur    wanPeakPoint // current, still-open minute
 }
@@ -32,6 +38,62 @@ const wanPeakCap = 24 * 60
 
 func newWanPeakRing() *wanPeakRing {
 	return &wanPeakRing{}
+}
+
+// setPath points the ring at a JSON file and loads whatever is already
+// on disk, dropping points older than the ring's 24 h span.
+func (r *wanPeakRing) setPath(path string) error {
+	r.mu.Lock()
+	r.path = path
+	r.mu.Unlock()
+	return r.load()
+}
+
+// load reads persisted points back into the ring; a missing file is a
+// fresh start, a corrupt one just means memory-only history.
+func (r *wanPeakRing) load() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(r.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var pts []wanPeakPoint
+	if err := json.Unmarshal(b, &pts); err != nil {
+		return err
+	}
+	cutoff := time.Now().Add(-24 * time.Hour).Unix()
+	out := pts[:0]
+	for _, p := range pts {
+		if p.T >= cutoff {
+			out = append(out, p)
+		}
+	}
+	r.points = out
+	return nil
+}
+
+// flushLocked atomically writes the closed minutes to disk; best
+// effort — a failed write only costs the next restart its history.
+func (r *wanPeakRing) flushLocked() {
+	if r.path == "" {
+		return
+	}
+	b, err := json.Marshal(r.points)
+	if err != nil {
+		return
+	}
+	tmp := r.path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, r.path)
 }
 
 // sample folds one 1-second reading into the open minute bucket,
@@ -50,6 +112,7 @@ func (r *wanPeakRing) sample(down, up float64, now time.Time) {
 			copy(r.points, r.points[n-wanPeakCap:])
 			r.points = r.points[:wanPeakCap]
 		}
+		r.flushLocked()
 		r.cur = wanPeakPoint{T: minute, Down: down, Up: up}
 		return
 	}

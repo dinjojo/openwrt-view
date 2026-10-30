@@ -216,6 +216,9 @@ func main() {
 		us := usage.New(*dataDir)
 		us.SetLocation(loc)
 		srv.SetUsageStore(us)
+		if err := srv.SetWanPeakPath(*dataDir); err != nil {
+			log.Logger.Warn().Err(err).Msg("1 s WAN peak ring starting fresh (unreadable state file)")
+		}
 	}
 	srv.SetDataPlan(*planGB, *planResetDay)
 	if err := srv.Run(ctx, addr); err != nil {
