@@ -140,21 +140,26 @@
     /* The empty stretch under the nav shows the latest few events, live
        on every tab; a click jumps to the Overview's full Events panel. */
     .side-events { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
-      gap: 4px; margin-top: var(--s4); }
+      gap: 4px; margin-top: var(--s4);
+      /* a partial last row fades out instead of slicing mid-text */ 
+      mask-image: linear-gradient(to bottom, #000 82%, transparent 100%); }
     .side-ev-title { font-size: var(--t-2xs); font-weight: 600; text-transform: uppercase;
       letter-spacing: .06em; color: var(--ink-2); padding: 0 12px; }
-    .side-ev { display: flex; align-items: baseline; gap: 8px; padding: 4px 12px; border: 0;
+    .side-ev { display: flex; align-items: flex-start; gap: 8px; padding: 6px 12px; border: 0;
       background: none; border-radius: 8px; font: inherit; font-size: var(--t-2xs);
       color: var(--ink-2); text-align: left; width: 100%; cursor: pointer; }
     .side-ev:hover { background: var(--hover, rgba(127,127,127,.12)); }
     .side-ev .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted, #94a3b8);
-      flex: none; align-self: center; }
+      flex: none; margin-top: 4px; }
     .side-ev.warn .dot { background: #f59e0b; }
     .side-ev.crit .dot { background: #ef4444; }
-    .side-ev .t { flex: none; color: var(--muted, #889); font-variant-numeric: tabular-nums; }
-    /* Up to three wrapped lines per event: the full message stays
-       readable where one nowrap line would ellipsize most of it away. */
-    .side-ev .m { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+    /* Time on its own line, message wrapped beneath — the narrow bar
+       gives the message the full width instead of a one-line sliver. */
+    .side-ev .c { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+    .side-ev .t { color: var(--muted, #889); font-variant-numeric: tabular-nums; }
+    /* Up to two wrapped lines per event at full width — enough for the
+       common messages; the Overview panel holds the full text anyway. */
+    .side-ev .m { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
       overflow: hidden; }
     .side-ev-none { font-size: var(--t-2xs); color: var(--muted, #889); padding: 0 12px; }
     .tab-btn { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 9px;
@@ -6019,8 +6024,8 @@ var uPlot=function(){"use strict";const e="u-off",l="u-label",t="width",n="heigh
           : (dayNames[d.getDay()] + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
         return '<button class="side-ev ' + (ev.sev === 'warn' || ev.sev === 'crit' ? ev.sev : '') + '">' +
           '<span class="dot" aria-hidden="true"></span>' +
-          '<span class="t">' + when + '</span>' +
-          '<span class="m">' + h(humanizeMACs(ev.msg)) + '</span></button>';
+          '<span class="c"><span class="t">' + when + '</span>' +
+          '<span class="m">' + h(humanizeMACs(ev.msg)) + '</span></span></button>';
       }).join('') || '<p class="side-ev-none">quiet — nothing notable</p>';
     }
     document.getElementById('side-events').addEventListener('click', () => {
